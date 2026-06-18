@@ -133,9 +133,16 @@ trap 'rm -f "$runout"; git update-ref -d "$import_ref" 2>/dev/null || true' EXIT
 dl_log "merge-back on $handle: snapshotting box working tree -> ${wbranch}"
 rc=0
 set +e
-"${run[@]}" 2>&1 | tee "$runout"
-rc="${PIPESTATUS[0]}"
+# Parse the box command's STDOUT only — that is where the in-box script writes
+# its DL_* sentinels. Crabbox echoes the full command SOURCE (which contains the
+# literal `echo DL_*` lines) to STDERR; folding that into the parsed stream (the
+# old `2>&1 | tee`) made the sentinel grep match the echoed source instead of
+# real output, so DL_NOGIT (checked first) always falsely won. Keep STDERR on the
+# terminal for the human; capture STDOUT alone for interpretation.
+"${run[@]}" >"$runout"
+rc="$?"
 set -e
+cat "$runout"   # surface the box's own stdout (incl. the DL_* result) to the human
 
 # Interpret box outcome (sentinels take precedence over the raw exit code).
 if   grep -q '\bDL_NOGIT\b'       "$runout"; then dl_die "$DL_PRECOND" "could not init a scratch repo inside the box (see output above)"
