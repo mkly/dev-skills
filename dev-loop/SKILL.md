@@ -180,6 +180,16 @@ When `dl-claim.sh` auto-pick returns empty, the goal's ready work is done — ru
 `dl-status.sh` to confirm no orphan leases remain, then report what landed on
 which review branches.
 
+**After a review branch is merged,** prompt the user to delete it:
+
+```sh
+git branch -d <branch>   # safe: -d refuses if branch isn't fully merged
+```
+
+Present this as a one-liner the user can run (or confirm you should run). Do not
+delete automatically — branch deletion is a destructive action that requires
+explicit human approval.
+
 **Compact context between tasks (prevent context rot).** One task's build/test/
 debug churn is worthless to the next, and carrying it forward degrades every
 later task. After each Phase 5 and before the next Phase 2, **compact the
