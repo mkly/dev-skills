@@ -94,6 +94,43 @@ for h in "${!REF_UUID[@]}"; do
 done
 [ "$any_dangle" -eq 1 ] || printf '  (none)\n'
 
+# Per-task git worktrees for THIS repo (under DEV_LOOP_WORKTREE_DIR). Flags
+# ORPHAN (registered but no pending task references it — left by a completed or
+# released task) and MISSING (a pending task records a worktree= path whose dir
+# is gone — re-run dl-box.sh to recreate it).
+printf '\nWorktrees:\n'
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  declare -A WT_UUID
+  for u in ${pending[@]+"${pending[@]}"}; do
+    [ -n "$u" ] || continue
+    wt="$(dl_anno_get "$u" worktree)"
+    [ -n "$wt" ] && WT_UUID["$wt"]="$u"
+  done
+  prefix="${DEV_LOOP_WORKTREE_DIR}/$(dl_repo_key)/"
+  had_wt=0
+  while IFS= read -r line; do
+    case "$line" in "worktree "*) path="${line#worktree }" ;; *) continue ;; esac
+    case "$path" in "$prefix"*) ;; *) continue ;; esac
+    had_wt=1
+    ref="${WT_UUID[$path]:-}"
+    if [ -n "$ref" ]; then
+      printf '  %-48s  task %s\n' "$path" "${ref:0:8}"
+      unset 'WT_UUID[$path]'
+    else
+      printf '  %-48s  ORPHAN (no pending task references it)\n' "$path"
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null || true)
+  for wt in ${!WT_UUID[@]+"${!WT_UUID[@]}"}; do
+    [ -d "$wt" ] && continue
+    had_wt=1
+    printf '  %-48s  MISSING (task %s recorded it; re-run dl-box.sh)\n' "$wt" "${WT_UUID[$wt]:0:8}"
+  done
+  [ "$had_wt" -eq 1 ] || printf '  (none)\n'
+  printf '  prune stale registrations with:  git worktree prune\n'
+else
+  printf '  (not inside a git repository)\n'
+fi
+
 if [ "${#ORPHANS[@]}" -gt 0 ]; then
   printf '\nHint: stop orphan leases with:  crabbox stop -provider %s -id <id>\n' "$CRABBOX_PROVIDER"
 fi

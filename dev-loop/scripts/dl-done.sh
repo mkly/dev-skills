@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # dl-done.sh — Phase 5: complete a task and free its box.
 #
-#   dl-done.sh <uuid> [--keep-box] [--force] [--dry-run]
+#   dl-done.sh <uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run]
 #
 # Stops the task's crabbox lease (Incus delete-on-release frees the instance),
-# marks the task done (which drops it from pending and releases the claim), and
-# records a lifecycle annotation. Refuses to complete a task owned by another
-# owner unless --force.
+# removes the task's per-task git worktree and its scratch branch dl/<slug> (the
+# review/<slug> branch is KEPT), marks the task done (which drops it from pending
+# and releases the claim), and records a lifecycle annotation. Refuses to
+# complete a task owned by another owner unless --force.
 #
 # Exit: 0 ok, 10 owned by another owner (without --force), 20 precondition.
 set -euo pipefail
@@ -17,20 +18,22 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-done.sh <uuid> [--keep-box] [--force] [--dry-run] [-h|--help]
+Usage: dl-done.sh <uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run] [-h|--help]
 
-  --keep-box  leave the crabbox lease running (default: stop it)
-  --force     complete even if the claim is owned by another owner
-  --dry-run   log mutations instead of performing them
+  --keep-box       leave the crabbox lease running (default: stop it)
+  --keep-worktree  leave the per-task worktree + scratch branch in place
+  --force          complete even if the claim is owned by another owner
+  --dry-run        log mutations instead of performing them
 
 Exit: 0 ok, 10 owned by another (use --force), 20 precondition.
 EOF
 }
 
-UUID=""; KEEP_BOX=0; FORCE=0
+UUID=""; KEEP_BOX=0; KEEP_WT=0; FORCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --keep-box) KEEP_BOX=1 ;;
+    --keep-box)      KEEP_BOX=1 ;;
+    --keep-worktree) KEEP_WT=1 ;;
     --force)    FORCE=1 ;;
     --dry-run)  DL_DRY_RUN=1 ;;
     -h|--help)  usage; exit 0 ;;
@@ -67,6 +70,27 @@ if [ "$KEEP_BOX" -ne 1 ]; then
 fi
 
 branch="$(dl_anno_get "$UUID" branch)"
+
+# Remove the per-task worktree and its scratch branch (best-effort). The
+# review/<slug> branch is shared in the repo and is KEPT — only the throwaway
+# worktree + dl/<slug> pointer go away, freeing the tree for reuse and keeping
+# `git worktree list` clean. Must run from inside the repo (not the worktree).
+if [ "$KEEP_WT" -ne 1 ]; then
+  wt="$(dl_anno_get "$UUID" worktree)"
+  if [ -n "$wt" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    desc="$(dl_task_field "$UUID" '.description // ""')"
+    wbranch="dl/$(dl_slug "$UUID" "$desc")"
+    dl_log "removing worktree $wt (scratch branch $wbranch)"
+    dl_do git worktree remove --force "$wt" 2>/dev/null \
+      || dl_warn "could not remove worktree $wt (may already be gone)"
+    dl_do git worktree prune 2>/dev/null || true
+    dl_do git branch -D "$wbranch" 2>/dev/null \
+      || dl_warn "could not delete scratch branch $wbranch (may already be gone)"
+  elif [ -n "$wt" ]; then
+    dl_warn "not inside a git repo; leaving worktree $wt in place (remove with: git worktree remove --force '$wt')"
+  fi
+fi
+
 dl_anno_event "$UUID" "completed${branch:+ (review branch: $branch)}"
 # shellcheck disable=SC1010  # 'done' is the Taskwarrior subcommand, not a loop keyword
 dl_do dl_task "$UUID" done

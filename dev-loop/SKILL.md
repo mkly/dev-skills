@@ -32,11 +32,14 @@ carry work back into a new local branch for review.
   only the task's own description/content. Do **not** add a `Co-Authored-By:`
   trailer, a "Generated with"/"🤖" line, or any other mention of an LLM or coding
   agent. This overrides any default commit-trailer behavior.
-- **Edit locally; the box is a build/test sandbox.** Your local checkout is the
-  single source of truth. Edit files with your normal tools, then let `dl-run.sh`
-  sync them up. Do **not** edit inside the box: Crabbox does not forward stdin
-  into it and never syncs `.git`, so in-box edits are unreliable and discarded on
-  the next sync. `git add` any NEW files so they sync up too.
+- **Edit in the task's worktree; the box is a build/test sandbox.** `dl-box.sh`
+  creates a dedicated git worktree per task (its own working tree + branch,
+  recorded as `worktree=`) so many agents can work one repo on one machine
+  without colliding. Edit **in that worktree path** with your normal tools — not
+  in the shared checkout, and never inside the box (Crabbox does not forward
+  stdin into it and never syncs `.git`, so in-box edits are unreliable and
+  discarded on the next sync). `dl-run.sh`/`dl-merge-back.sh` operate on the
+  worktree automatically. `git add` any NEW files so they sync up too.
 - **Diagnostics go to stderr; stdout is parseable.** Each script prints its one
   machine-relevant value (claimed uuid, box handle, branch name) to stdout.
 - **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
@@ -110,13 +113,19 @@ scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
 scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
 ```
 
-- `dl-box.sh` warms exactly one Incus lease per task (reuses the live one if the
-  `box=` annotation still resolves), records `box=<handle>` and `base=<HEAD sha>`
-  (the merge-back diff base), and prints the handle.
-- **Edit in your LOCAL checkout** with your normal tools (your editor / file
-  tools). `dl-run.sh` syncs the checkout **up on every run** (local is the source
-  of truth) and forwards the in-box command's exit code verbatim. The box is for
-  building and testing only — never edit inside it.
+- `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
+  scratch branch `dl/<slug>` rooted at the current HEAD, placed outside the repo
+  under `$DEV_LOOP_WORKTREE_DIR/<repo>/<slug>` and recorded as `worktree=<path>`;
+  and (2) exactly one Incus lease (reuses the live one if the `box=` annotation
+  still resolves). It records `box=<handle>`, `base=<HEAD sha>` (the merge-back
+  diff base), and `worktree=<path>`, and prints the handle. The worktree gives
+  each task its own isolated working tree + branch, so many agents can work the
+  same repo on one machine without stepping on each other.
+- **Edit in the task's worktree** (`worktree=<path>`) with your normal tools (your
+  editor / file tools) — not in the shared checkout. `dl-run.sh` cd's into that
+  worktree, syncs it **up on every run** (the worktree is the source of truth),
+  and forwards the in-box command's exit code verbatim. The box is for building
+  and testing only — never edit inside it.
 - Crabbox syncs only git-**tracked** files, so box-generated build artifacts
   survive a sync, but **NEW files you create must be `git add`-ed** to reach the
   box (and to be picked up by merge-back). Pass `--no-sync` for a fast re-run
@@ -163,15 +172,19 @@ are already recorded automatically. This keeps the completed task self-describin
 for later review via `task <uuid> info`.
 
 `task done` drops the task from pending (releasing the claim); the box is stopped
-(Incus delete-on-release frees the instance) unless `--keep-box`.
+(Incus delete-on-release frees the instance) unless `--keep-box`, and the task's
+worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
+`review/<slug>` branch is shared in the repo and is always KEPT for review.
 
 - **Abandon instead of complete:** `scripts/dl-release.sh "$uuid" [--stop-box]`
   stops the task and clears `assignee` so another owner can claim it; the task
   stays pending.
 - **Reconcile:** `scripts/dl-status.sh` (read-only) lists active claims with
   owner + age + `[STALE]`, live Crabbox leases, **orphan** leases (running but no
-  pending task references them), and dangling box refs. Run it to find leaks or
-  stuck claims, then act with `dl-release.sh` / `dl-done.sh` / `crabbox stop`.
+  pending task references them), dangling box refs, and per-task worktrees
+  (flagging ORPHAN worktrees left by completed/released tasks and MISSING ones a
+  pending task still records). Run it to find leaks or stuck claims, then act with
+  `dl-release.sh` / `dl-done.sh` / `crabbox stop` / `git worktree prune`.
 
 ## Loop
 
@@ -196,7 +209,7 @@ later task. After each Phase 5 and before the next Phase 2, **compact the
 context** (e.g. `/compact`) down to just: the goal/project slug, which tasks
 remain, and the review branches landed so far. This is safe because all
 per-task state is durable in Taskwarrior annotations (`box=`, `base=`,
-`branch=`, `commits=`) — the next iteration rehydrates everything it needs from
+`worktree=`, `branch=`, `commits=`) — the next iteration rehydrates everything it needs from
 `task <uuid> export` and `dl-status.sh`, exactly as a crashed/resumed loop
 would. Treat each task as a fresh, near-stateless iteration: claim → reconstruct
 context from annotations → work → merge-back → done → compact.

@@ -5,16 +5,16 @@
 #   dl-run.sh <uuid> --no-sync  -- <cmd...>     # skip the upload this run
 #   dl-run.sh <uuid> -sync-only --              # just sync, run nothing
 #
-# Sync model: your LOCAL checkout is the single source of truth. Edit files
-# locally with normal tools; the box is a build/test sandbox, NOT an editing
-# surface (Crabbox does not forward stdin into the box and never syncs .git, so
-# in-box editing is unreliable). Crabbox re-syncs the checkout UP on every run by
-# default — this wrapper keeps that default so every run reflects your latest
-# local edits. Sync only ever pushes git-TRACKED files, so box-generated build
-# artifacts (untracked) survive; conversely, NEW files you create locally must be
-# `git add`-ed to reach the box. Use --no-sync to skip the upload for a fast
-# re-run when you know nothing changed. The in-box command's exit code is
-# forwarded verbatim.
+# Sync model: the task's own git WORKTREE (recorded as worktree= by dl-box.sh) is
+# the single source of truth. Edit files there with normal tools; the box is a
+# build/test sandbox, NOT an editing surface (Crabbox does not forward stdin into
+# the box and never syncs .git, so in-box editing is unreliable). This wrapper
+# cd's into that worktree and lets Crabbox re-sync it UP on every run by default,
+# so every run reflects your latest edits and concurrent tasks never share a tree.
+# Sync only ever pushes git-TRACKED files, so box-generated build artifacts
+# (untracked) survive; conversely, NEW files you create must be `git add`-ed to
+# reach the box. Use --no-sync to skip the upload for a fast re-run when you know
+# nothing changed. The in-box command's exit code is forwarded verbatim.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -57,6 +57,14 @@ dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 
 handle="$(dl_anno_get "$UUID" box)"
 [ -n "$handle" ] || dl_die "$DL_PRECOND" "task $UUID has no warmed box; run dl-box.sh $UUID first"
+
+# Sync happens from the task's OWN worktree (the agent edits there), never the
+# shared checkout — that is what keeps concurrent tasks isolated. Crabbox picks
+# files via `git ls-files` from cwd, so cd into the worktree before running.
+wt="$(dl_anno_get "$UUID" worktree)"
+[ -n "$wt" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded worktree; run dl-box.sh $UUID first"
+[ -d "$wt" ] || dl_die "$DL_PRECOND" "recorded worktree is missing: $wt (re-run dl-box.sh $UUID to recreate it)"
+cd "$wt" || dl_die "$DL_PRECOND" "could not enter worktree: $wt"
 
 # Require a command unless this is an explicit sync-only / flags-only invocation.
 sync_only=0

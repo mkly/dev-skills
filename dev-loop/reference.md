@@ -32,6 +32,7 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `INCUS_TYPE`          | (unset → `container`)                     | Optional `-incus-instance-type` (`container`\|`vm`); warmup only. |
 | `INCUS_REMOTE`        | (unset → local)                           | Optional `-incus-remote`; warmup only. |
 | `DEV_LOOP_STATE_DIR`  | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop` | Holds the `flock` lockfiles (`locks/`). |
+| `DEV_LOOP_WORKTREE_DIR` | `${DEV_LOOP_STATE_DIR}/worktrees`        | Parent dir for per-task git worktrees. Each task gets `<dir>/<repo-key>/<slug>` (a worktree on scratch branch `dl/<slug>`). Kept OUTSIDE the repo so worktrees never appear as untracked files. The `<repo-key>` is derived from `git rev-parse --git-common-dir`, so it is stable across a repo's own worktrees. |
 | `DEV_LOOP_BUNDLE_DIR` | `.dev-loop`                               | Repo-local, self-gitignored dir for downloaded bundles. Never the working tree. |
 | `DL_DRY_RUN`          | (unset)                                   | Non-empty → mutating ops are logged, not run (same as `--dry-run`). Reads still run. |
 
@@ -48,12 +49,12 @@ no effect until the next warmup.
 |---------------------|---------------------------------------------------|-------------------|-------|
 | `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
 | `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | flock + CAS lock. Auto-pick when no uuid. |
-| `dl-box.sh`         | `<uuid> [--dry-run]`                                | box handle        | Warm-or-reuse one lease; records `box=`,`base=`. |
-| `dl-run.sh`         | `<uuid> [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | Syncs local tree up every run; `--no-sync` skips. Forwards cmd exit code. |
-| `dl-merge-back.sh`  | `<uuid> [<branch>] [--dry-run]`                    | branch name       | In-box orphan snapshot→bundle→download→re-parent onto base→new branch. |
-| `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; clears `assignee`; task stays pending. |
-| `dl-done.sh`        | `<uuid> [--keep-box] [--force] [--dry-run]`        | —                 | `task done` + stop box. Idempotent if already done. |
-| `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease reconciliation. Mutates nothing. |
+| `dl-box.sh`         | `<uuid> [--dry-run]`                                | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm-or-reuse one lease; records `worktree=`,`base=`,`box=`. |
+| `dl-run.sh`         | `<uuid> [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--no-sync` skips. Forwards cmd exit code. |
+| `dl-merge-back.sh`  | `<uuid> [<branch>] [--dry-run]`                    | branch name       | Operates on the task worktree: in-box orphan snapshot→bundle→download→re-parent onto base→new branch. |
+| `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; clears `assignee`; task stays pending (worktree left intact). |
+| `dl-done.sh`        | `<uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run]` | —          | `task done` + stop box + remove worktree & scratch branch `dl/<slug>`. `review/<slug>` is kept. Idempotent if already done. |
+| `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease/worktree reconciliation. Mutates nothing. |
 
 ## Recipes
 
@@ -88,23 +89,32 @@ Without `--steal-after`, an owned task always returns `10`.
 
 ### Work in the box & the sync model
 
-**Your local checkout is the single source of truth.** Edit files locally with
-your normal tools; the box is a build/test sandbox only. Do NOT edit inside the
-box — Crabbox does not forward stdin into `run` commands (so heredoc/pipe-driven
-in-box editors silently get no input) and it never syncs `.git`, so in-box state
-is unreliable and is overwritten on the next sync. (This is why ad-hoc in-box
-"apply these string replacements" scripts are an anti-pattern: edit locally
-instead.)
+**The task's own git worktree is the single source of truth.** `dl-box.sh`
+creates one worktree per task — a separate working tree on scratch branch
+`dl/<slug>`, rooted at `base`, under `$DEV_LOOP_WORKTREE_DIR/<repo-key>/<slug>`
+and recorded as `worktree=<path>`. Edit files **in that worktree path** with your
+normal tools. This is what isolates concurrent tasks: a git branch can be checked
+out in only one worktree at a time, so two agents on the same repo never share a
+working tree or fight over the index. (Objects and refs are shared across
+worktrees, so the `review/<slug>` branch a task produces is still visible from the
+main checkout.) `dl-run.sh` and `dl-merge-back.sh` cd into the worktree
+automatically; you do not pass the path.
 
-Crabbox rsyncs your checkout **up** on every `run`, copying only git-**tracked**
-files (it derives the file list from `git ls-files`). So `dl-run.sh` syncs on
-every run by default — each run reflects your latest local edits — while
-box-generated build artifacts (untracked) survive a sync untouched. The catch:
-**a NEW file you create locally is untracked, so `git add` it or it will not sync
-up** (and merge-back will not see it).
+The box is a build/test sandbox only. Do NOT edit inside the box — Crabbox does
+not forward stdin into `run` commands (so heredoc/pipe-driven in-box editors
+silently get no input) and it never syncs `.git`, so in-box state is unreliable
+and is overwritten on the next sync. (This is why ad-hoc in-box "apply these
+string replacements" scripts are an anti-pattern: edit in the worktree instead.)
+
+Crabbox rsyncs the worktree **up** on every `run`, copying only git-**tracked**
+files (it derives the file list from `git ls-files`, run from the worktree). So
+`dl-run.sh` syncs on every run by default — each run reflects your latest edits —
+while box-generated build artifacts (untracked) survive a sync untouched. The
+catch: **a NEW file you create is untracked, so `git add` it (in the worktree) or
+it will not sync up** (and merge-back will not see it).
 
 ```sh
-scripts/dl-run.sh "$uuid" -- bash -lc 'apt-get update && make'   # syncs local tree up
+scripts/dl-run.sh "$uuid" -- bash -lc 'apt-get update && make'   # syncs worktree up
 scripts/dl-run.sh "$uuid" -- bash -lc 'make test'                # syncs again (latest edits)
 scripts/dl-run.sh "$uuid" --no-sync -- bash -lc 'make test'      # fast re-run, skip upload
 scripts/dl-run.sh "$uuid" -sync-only --                          # just sync, run nothing
@@ -126,7 +136,7 @@ happen in **one** `crabbox run`. The box script emits a `DL_*` sentinel on stdou
 (captured and `grep`ed locally) and a matching non-zero exit so a no-op /
 init-fail never triggers a download:
 
-In the box (single run; local tree synced up first):
+In the box (single run; the task worktree synced up first):
 ```sh
 git config --global --add safe.directory '*'
 rm -rf .git; git init -q       || { echo DL_NOGIT;       exit 41; }   # throwaway repo
@@ -172,18 +182,28 @@ scripts/dl-status.sh
 ```
 Read-only. Reports active claims (owner, age, `*` = yours, `[STALE]` at
 `DEV_LOOP_STALE`), live leases from `crabbox list -json`, **orphan** leases (a
-running lease no pending task references → likely a leak), and dangling box refs
-(a task's `box=` no longer resolves). Act on findings with `dl-release.sh`,
-`dl-done.sh`, or the printed `crabbox stop` hint.
+running lease no pending task references → likely a leak), dangling box refs
+(a task's `box=` no longer resolves), and per-task **worktrees** for this repo:
+each is matched against `git worktree list` filtered to this repo's
+`$DEV_LOOP_WORKTREE_DIR/<repo-key>/` prefix and flagged ORPHAN (registered but no
+pending task references it — left by a completed/released task; prune with
+`git worktree prune`) or MISSING (a pending task records a `worktree=` path whose
+dir is gone — re-run `dl-box.sh` to recreate it). Act on findings with
+`dl-release.sh`, `dl-done.sh`, the printed `crabbox stop` hint, or
+`git worktree prune`.
 
 ### Recoverable state (annotations, not extra UDAs)
 
 To keep config to the single `assignee` UDA, machine state lives in append-only
 annotations (reads take the last match): `box=<handle>`, `base=<sha>`,
-`branch=<name>`, `commits=<base>..<head> (n=N)` (the commit range the
-task produced, recorded by `dl-merge-back.sh` so commits stay linked even if the
-branch is merged/renamed/deleted), plus free-form `dev-loop: <event> (by <owner>)`
-lifecycle notes. A crashed/resumed loop reconstructs context from these.
+`worktree=<path>` (the per-task git worktree, recorded by `dl-box.sh`; phases
+cd into it to edit/sync/merge-back), `branch=<name>`,
+`commits=<base>..<head> (n=N)` (the commit range the task produced, recorded by
+`dl-merge-back.sh` so commits stay linked even if the branch is
+merged/renamed/deleted), plus free-form `dev-loop: <event> (by <owner>)`
+lifecycle notes. A crashed/resumed loop reconstructs context from these — and
+because the `worktree=` path is durable, a resumed loop re-enters the same
+isolated tree (or `dl-box.sh` recreates it if it was pruned).
 
 Annotations are also the place for **human-readable task notes**: a `summary:`
 annotation (added before `dl-done.sh`) captures what was done and why. Because
@@ -205,10 +225,13 @@ build/test churn that causes context rot is dropped.
 | `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
 | Merge-back exit `20` (in-box snapshot failed) | Read the box output above the error. The box builds a throwaway repo (`git init`) and bundles an orphan snapshot — `.git` is intentionally NOT needed in the box. |
-| Merge-back exit `30` "no changes" | The box working tree is empty or identical to `base`. Confirm your edits are local and tracked (`git add` new files), then re-run `dl-run.sh` so they sync up before merge-back. |
+| Merge-back exit `30` "no changes" | The box working tree is empty or identical to `base`. Confirm your edits are in the task **worktree** and tracked (`git add` new files), then re-run `dl-run.sh` so they sync up before merge-back. |
 | Merge-back exit `30` "branch already exists" | Pass an explicit `<branch>` name, or delete the stale local branch. |
 | `bundle verify` fails locally | The bundle is corrupt/truncated (re-run merge-back). The orphan bundle has no base prerequisite, so a moved/pruned local `base` does NOT cause a verify failure — it only falls back to importing an orphan branch. |
-| My local edits didn't reach the box / merge-back | The local checkout is the source of truth and syncs up every run, but only **tracked** files sync. `git add` new files; don't edit inside the box. |
+| My edits didn't reach the box / merge-back | The task **worktree** (`worktree=` annotation) is the source of truth and syncs up every run, but only **tracked** files sync. Make sure you edited in the worktree path (not the shared checkout), `git add` new files, and don't edit inside the box. |
+| `dl-box.sh` exits `20` "could not create worktree" | The scratch branch `dl/<slug>` is already checked out in another worktree, or the path is occupied. Run `dl-status.sh` / `git worktree list`; clear a stale one with `git worktree remove --force <path>` then `git worktree prune`. |
+| `dl-run.sh`/`dl-merge-back.sh` exit `20` "recorded worktree is missing" | The worktree dir was deleted/pruned out from under the task. Re-run `dl-box.sh <uuid>` to recreate it on the same scratch branch, then retry. |
+| Worktree flagged ORPHAN in `dl-status.sh` | A worktree left by a completed/released task. Remove it: `git worktree remove --force <path>` then `git worktree prune` (the registration alone clears with just `git worktree prune`). |
 | Orphan lease in `dl-status.sh` | A leaked box. Stop it: `crabbox stop -provider <p> -id <id>`. |
 | Secrets uploaded to the box | Add them to `.crabboxignore`; review with `crabbox sync-plan`. Inject env only via crabbox `-allow-env`/`-env-from-profile`. |
 | Two agents, same Unix user, claims collide on identity | Export distinct `DEV_LOOP_OWNER` per agent before Phase 0. |

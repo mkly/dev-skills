@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# dl-box.sh — Phase 3: warm (or reuse) one Incus box lease for a task.
+# dl-box.sh — Phase 3: warm (or reuse) one Incus box lease for a task, and
+# create the per-task git worktree the agent edits in.
 #
 #   dl-box.sh <uuid> [--dry-run]
 #
@@ -8,6 +9,11 @@
 # a deterministic friendly slug. The resolved handle is printed to stdout and
 # recorded as box=<handle>; the current local HEAD is recorded as base=<sha>
 # (the merge-back diff base). One lease per task — never leaks a second.
+#
+# It also creates a dedicated git worktree on a scratch branch dl/<slug>, rooted
+# at base, OUTSIDE the repo tree, and records it as worktree=<path>. The agent
+# edits THERE — never in the shared checkout — so concurrent tasks on one machine
+# never share a working tree. One worktree per task; a live one is reused.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -19,7 +25,8 @@ usage() {
 Usage: dl-box.sh <uuid> [--dry-run] [-h|--help]
 
 Warm or reuse the Incus box for a claimed task. Prints the box handle on stdout.
-Records box=<handle> and base=<local HEAD sha> as task annotations.
+Records box=<handle>, base=<local HEAD sha>, and worktree=<path> as annotations,
+and creates a per-task git worktree (branch dl/<slug>) for the agent to edit in.
 EOF
 }
 
@@ -51,23 +58,63 @@ box_alive() {
   crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
 }
 
-# 1. Reuse an existing live box if one is recorded.
+# ensure_worktree <path> <branch> <base> — make sure a live per-task worktree
+# exists at <path> on scratch branch <branch>, rooted at <base>. Reuses a live
+# one; recreates after a prune; reuses the branch if it already exists.
+ensure_worktree() {
+  local wt="$1" wbranch="$2" base="$3"
+  if git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    dl_log "reusing worktree for $UUID: $wt"
+    return 0
+  fi
+  if [ -n "$DL_DRY_RUN" ]; then
+    dl_log "DRY-RUN: git worktree add ${wbranch} -> $wt (base ${base:0:12})"
+    return 0
+  fi
+  git worktree prune >/dev/null 2>&1 || true   # drop stale registrations first
+  mkdir -p "$(dirname "$wt")"
+  if git show-ref --verify --quiet "refs/heads/${wbranch}"; then
+    git worktree add "$wt" "$wbranch" >&2 \
+      || dl_die "$DL_PRECOND" "could not create worktree at $wt on existing branch $wbranch"
+  else
+    git worktree add -b "$wbranch" "$wt" "$base" >&2 \
+      || dl_die "$DL_PRECOND" "could not create worktree at $wt (branch $wbranch, base ${base:0:12})"
+  fi
+  dl_log "worktree ready for $UUID: $wt (branch $wbranch, base ${base:0:12})"
+}
+
+# 1. Resolve the diff base and ensure the per-task worktree. base is the
+#    worktree's branch point AND the merge-back diff base; once recorded it is
+#    sticky (re-derived from HEAD only on the very first warm). The agent edits
+#    in this worktree — the shared checkout's own working tree is never used, so
+#    its dirty state is irrelevant to the task.
+base="$(dl_anno_get "$UUID" base)"
+had_base=1
+if [ -z "$base" ]; then
+  had_base=0
+  base="$(git rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$base" ] || dl_die "$DL_PRECOND" "repository has no commits; make an initial commit before warming a box"
+fi
+
+wbranch="dl/${slug}"
+wt="$(dl_anno_get "$UUID" worktree)"
+had_wt=1
+if [ -z "$wt" ]; then had_wt=0; wt="$(dl_worktree_dir_for "$slug")"; fi
+ensure_worktree "$wt" "$wbranch" "$base"
+
+# Record base/worktree once (annotations are append-only; avoid duplicates on
+# re-runs). dl-run.sh and dl-merge-back.sh read worktree= to know where to sync.
+[ "$had_base" -eq 1 ] || dl_anno_set "$UUID" base "$base"
+[ "$had_wt" -eq 1 ]   || dl_anno_set "$UUID" worktree "$wt"
+
+# 2. Reuse an existing live box if one is recorded.
 existing="$(dl_anno_get "$UUID" box)"
 if [ -n "$existing" ] && box_alive "$existing"; then
-  dl_log "reusing live box for $UUID: $existing"
+  dl_log "reusing live box for $UUID: $existing (worktree: $wt)"
   printf '%s\n' "$existing"
   exit "$DL_OK"
 fi
 [ -n "$existing" ] && dl_warn "recorded box '$existing' is gone; warming a fresh lease"
-
-# 2. Record the diff base (local HEAD). The local checkout is the source of
-#    truth: tracked-file edits sync up to the box on every dl-run.sh and fold
-#    into the eventual task commit. NEW files must be `git add`-ed to sync.
-base="$(git rev-parse HEAD 2>/dev/null || true)"
-[ -n "$base" ] || dl_die "$DL_PRECOND" "repository has no commits; make an initial commit before warming a box"
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-  dl_warn "working tree is dirty; tracked-file edits sync up to the box and fold into the task commit (run 'git add' for new files so they sync too)"
-fi
 
 # 3. Warm a new lease.
 mapfile -t incus_flags < <(dl_crabbox_incus_flags)
@@ -102,9 +149,8 @@ else
   [ -n "$handle" ] || dl_die "$DL_PRECOND" "could not resolve a live box handle after warmup"
 fi
 
-# 4. Record machine state on the task.
+# 4. Record machine state on the task (base/worktree already recorded above).
 dl_anno_set "$UUID" box "$handle"
-dl_anno_set "$UUID" base "$base"
-dl_anno_event "$UUID" "box warmed: $handle (base ${base:0:12})"
-dl_log "box ready for $UUID: $handle (base ${base:0:12})"
+dl_anno_event "$UUID" "box warmed: $handle (base ${base:0:12}, worktree $wt)"
+dl_log "box ready for $UUID: $handle (base ${base:0:12}, worktree $wt)"
 printf '%s\n' "$handle"

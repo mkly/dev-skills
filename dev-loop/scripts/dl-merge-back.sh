@@ -64,6 +64,15 @@ handle="$(dl_anno_get "$UUID" box)"
 base="$(dl_anno_get "$UUID" base)"
 [ -n "$base" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded base; run dl-box.sh $UUID first"
 
+# Snapshot the task's OWN worktree (where the agent edited), not the shared
+# checkout. Crabbox syncs from cwd, so cd in. Branches/objects are shared across
+# all of a repo's worktrees, so the review branch we create is still visible from
+# the main checkout.
+wt="$(dl_anno_get "$UUID" worktree)"
+[ -n "$wt" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded worktree; run dl-box.sh $UUID first"
+[ -d "$wt" ] || dl_die "$DL_PRECOND" "recorded worktree is missing: $wt (re-run dl-box.sh $UUID to recreate it)"
+cd "$wt" || dl_die "$DL_PRECOND" "could not enter worktree: $wt"
+
 desc="$(dl_task_field "$UUID" '.description // ""')"
 slug="$(dl_slug "$UUID" "$desc")"
 wbranch="dl/${slug}"                 # the orphan branch built inside the box
