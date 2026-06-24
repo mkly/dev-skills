@@ -3,8 +3,9 @@
 A repo-agnostic Claude Code / Agent skill that runs a full development loop:
 
 > **decompose a goal into Taskwarrior tasks → claim a task (so only one owner
-> ever works it) → do the work inside an isolated Incus box leased via Crabbox →
-> merge the box's changes back onto a new *local* review branch.**
+> ever works it) → work in a per-task git worktree, building/testing inside an
+> isolated Incus box leased via Crabbox → snapshot the worktree onto a new
+> *local* review branch.**
 
 It never pushes to a remote and never auto-merges. The review branch is left for
 a human/agent to inspect and merge deliberately.
@@ -21,7 +22,7 @@ in `scripts/`.
 | [Taskwarrior](https://taskwarrior.org/) (`task`) | task store **and** the claim lock | `2.6.2` (file-based, no taskd needed) |
 | [Crabbox](https://github.com/openclaw/crabbox) (`crabbox`) | leases the isolated execution box | `0.32.0` |
 | [Incus](https://linuxcontainers.org/incus/) (`incus`) | the box provider | `6.0.4` |
-| `git`, `jq`, `flock`, `bash` | bundles, JSON parsing, the OS mutex | — |
+| `git`, `jq`, `flock`, `bash` | worktrees + local review branches, JSON parsing, the OS mutex | — |
 
 `flock` and `bash` ship with most Linux distros (`flock` is in `util-linux`).
 Incus must be initialized (`incus admin init`) and reachable — `dl-setup.sh`
@@ -77,8 +78,9 @@ distinct value first — see `reference.md`.
 - **One owner per task.** `dl-claim.sh` takes an OS `flock` (true mutex on this
   single host) plus a compare-and-swap on the `assignee` UDA. A lost race exits
   `10`; the agent picks another task.
-- **No remote push, no auto-merge.** Changes return as a verified `git bundle`
-  fetched into a fresh local branch only.
+- **No remote push, no auto-merge.** Merge-back snapshots the task's own git
+  worktree and re-parents it onto the recorded base as one commit on a fresh
+  *local* review branch — a purely local operation, no box round-trip.
 - **No secrets into the box** except via Crabbox's own `-allow-env` /
   `-env-from-profile`. Review `.crabboxignore` / `crabbox sync-plan`.
 - **Leak control.** Every lease gets a `-ttl` and a `-label`; `dl-status.sh`

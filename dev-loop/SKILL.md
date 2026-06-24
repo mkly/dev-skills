@@ -14,8 +14,8 @@ description: >-
 
 Orchestrate a goal end-to-end: **decompose → claim → work in an isolated box →
 merge back to a local review branch → done.** Taskwarrior is the task store and
-the lock; Crabbox (Incus provider) is the isolated execution box; git bundles
-carry work back into a new local branch for review.
+the lock; Crabbox (Incus provider) is the isolated execution box; the per-task
+git worktree is snapshotted into a new local branch for review.
 
 ## Operating rules (do not violate)
 
@@ -127,9 +127,10 @@ scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
   and forwards the in-box command's exit code verbatim. The box is for building
   and testing only — never edit inside it.
 - Crabbox syncs only git-**tracked** files, so box-generated build artifacts
-  survive a sync, but **NEW files you create must be `git add`-ed** to reach the
-  box (and to be picked up by merge-back). Pass `--no-sync` for a fast re-run
-  when nothing changed locally.
+  survive a sync, but **NEW files you create must be `git add`-ed to reach the
+  box** (merge-back snapshots the whole worktree, so it picks up untracked
+  non-ignored files regardless — but the box won't see them until tracked). Pass
+  `--no-sync` for a fast re-run when nothing changed locally.
 
 ## Phase 4 — Merge back to a NEW local branch
 
@@ -138,19 +139,20 @@ branch="$(scripts/dl-merge-back.sh "$uuid")"        # default: review/<slug>
 # or: scripts/dl-merge-back.sh "$uuid" review/my-name
 ```
 
-Crabbox never syncs `.git`, so merge-back works by **snapshot, not shared
-history**. In a single `crabbox run` (so `-download` fires only on success) the
-box makes a throwaway repo, stages the whole working tree, and writes a
-`git bundle` of one **orphan** commit. The bundle is downloaded into the
-gitignored `.dev-loop/` dir, `git bundle verify`'d, imported, and then
-**re-parented onto `base`** locally (`git commit-tree -p base`) so the review
-branch is a clean one-commit increment whose `base..branch` diff is exactly the
-task's changes. Prints the branch name; records `branch=` on the task.
+Merge-back is a purely **local** git operation on the task's worktree — no box
+round-trip. The worktree (rooted at `base`) is the source of truth: the agent
+edits there and the box is build/test only. Merge-back stages the worktree's
+whole working tree into a throwaway index, writes that tree, and **re-parents it
+onto `base`** (`git commit-tree -p base`) as one commit, so the review branch is
+a clean increment whose `base..branch` diff is exactly the task's changes.
+Gitignored build artifacts are excluded; newly created files are included
+automatically (no `git add` needed for merge-back). Prints the branch name;
+records `branch=` on the task.
 
-- Exit `30` = nothing to merge (box tree empty or identical to base) / verify
-  failed / branch already exists → report it; pass an explicit `<branch>` to
-  resolve a name collision.
-- Exit `20` = the in-box snapshot/bundle step failed → read the output above.
+- Exit `30` = nothing to merge (worktree identical to base) / branch already
+  exists → report it; pass an explicit `<branch>` to resolve a name collision.
+- Exit `20` = no recorded base/worktree, or the worktree dir is missing → run
+  `dl-box.sh "$uuid"` first (or to recreate a pruned worktree).
 - It does **not** merge the branch. Show the user `git log --oneline base..branch`
   and `git diff --stat` (the script prints both) and let them review and merge.
 - It records a `commits=<base>..<head> (n=N)` annotation so the produced commits

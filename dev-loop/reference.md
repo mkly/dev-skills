@@ -15,7 +15,7 @@ Every script uses this set so callers branch on the code, not on prose:
 | `0`  | ok          | success (auto-pick claim with nothing available is also `0`/empty) | proceed                                                 |
 | `10` | lost-race   | task is owned by another owner                                     | pick a different task; never work it                    |
 | `20` | precondition| missing tool, bad/absent task, no box, doctor fail, usage error    | read the message, fix the precondition, retry           |
-| `30` | merge       | nothing to merge, bundle-verify fail, or branch already exists     | report; pass an explicit branch / re-warm if base moved |
+| `30` | merge       | nothing to merge (worktree identical to base) or branch already exists | report; pass an explicit branch |
 
 Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 `DL_MERGE` (exported).
@@ -33,7 +33,6 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `INCUS_REMOTE`        | (unset → local)                           | Optional `-incus-remote`; warmup only. |
 | `DEV_LOOP_STATE_DIR`  | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop` | Holds the `flock` lockfiles (`locks/`). |
 | `DEV_LOOP_WORKTREE_DIR` | `${DEV_LOOP_STATE_DIR}/worktrees`        | Parent dir for per-task git worktrees. Each task gets `<dir>/<repo-key>/<slug>` (a worktree on scratch branch `dl/<slug>`). Kept OUTSIDE the repo so worktrees never appear as untracked files. The `<repo-key>` is derived from `git rev-parse --git-common-dir`, so it is stable across a repo's own worktrees. |
-| `DEV_LOOP_BUNDLE_DIR` | `.dev-loop`                               | Repo-local, self-gitignored dir for downloaded bundles. Never the working tree. |
 | `DL_DRY_RUN`          | (unset)                                   | Non-empty → mutating ops are logged, not run (same as `--dry-run`). Reads still run. |
 
 Durations accept `90s`, `30m`, `2h`, `1d`, `2h30m`, or a bare integer (seconds).
@@ -51,7 +50,7 @@ no effect until the next warmup.
 | `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | flock + CAS lock. Auto-pick when no uuid. |
 | `dl-box.sh`         | `<uuid> [--dry-run]`                                | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm-or-reuse one lease; records `worktree=`,`base=`,`box=`. |
 | `dl-run.sh`         | `<uuid> [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--no-sync` skips. Forwards cmd exit code. |
-| `dl-merge-back.sh`  | `<uuid> [<branch>] [--dry-run]`                    | branch name       | Operates on the task worktree: in-box orphan snapshot→bundle→download→re-parent onto base→new branch. |
+| `dl-merge-back.sh`  | `<uuid> [<branch>] [--dry-run]`                    | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. No box round-trip. |
 | `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; clears `assignee`; task stays pending (worktree left intact). |
 | `dl-done.sh`        | `<uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run]` | —          | `task done` + stop box + remove worktree & scratch branch `dl/<slug>`. `review/<slug>` is kept. Idempotent if already done. |
 | `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease/worktree reconciliation. Mutates nothing. |
@@ -125,55 +124,38 @@ Extra flags before `--` are passed through to `crabbox run` (e.g. `-allow-env`,
 `-keep-on-failure` (a failed run leaves the box for debugging) and a
 `-label <project>/<uuid>`.
 
-### Merge back via git bundle (exact sequence)
+### Merge back to a local branch (exact sequence)
 
-Crabbox never syncs `.git`, so the box has no history to bundle incrementally.
-Merge-back therefore works by **snapshot**: the box builds a throwaway repo and
-captures its working tree as a single **orphan** commit (no `base` prerequisite),
-bundles that, and the bundle is **re-parented onto `base` locally**. The download
-only fires on command success, so the snapshot, no-op guard, and bundle creation
-happen in **one** `crabbox run`. The box script emits a `DL_*` sentinel on stdout
-(captured and `grep`ed locally) and a matching non-zero exit so a no-op /
-init-fail never triggers a download:
+Merge-back is a **purely local git operation** on the task's worktree — no box
+round-trip. This is sound because the worktree (recorded as `worktree=`, rooted
+at `base`) is the single source of truth: the agent edits there and the box is a
+build/test sandbox that is never edited in (`dl-run.sh` only ever syncs the
+worktree UP). So everything needed for the review branch is already on the host.
 
-In the box (single run; the task worktree synced up first):
+Locally, in the task worktree:
 ```sh
-git config --global --add safe.directory '*'
-rm -rf .git; git init -q       || { echo DL_NOGIT;       exit 41; }   # throwaway repo
-git add -A
-git diff --cached --quiet      && { echo DL_NOOP;        exit 43; }   # empty working tree
-git commit -q --no-verify -m "<task desc>" \
-                               || { echo DL_COMMIT_FAIL; exit 45; }   # local author identity via env
-git branch -f dl/<slug> HEAD
-git bundle create /tmp/<slug>.bundle dl/<slug> \
-                               || { echo DL_BUNDLE_FAIL; exit 44; }   # whole branch, no prereq
-echo DL_BUNDLE_OK
-```
-`crabbox run ... -download /tmp/<slug>.bundle=.dev-loop/<slug>.bundle -- bash -c '<above>'`
-
-Locally, after a successful download:
-```sh
-git bundle verify .dev-loop/<slug>.bundle                     # pure integrity check (orphan, no prereqs)
-git fetch .dev-loop/<slug>.bundle refs/heads/dl/<slug>:refs/dev-loop/import/<slug>
-tree="$(git rev-parse refs/dev-loop/import/<slug>^{tree})"
+cd "$worktree"
+# Stage the whole working tree into a THROWAWAY index (never the task's real
+# index); `git add -A` against an empty index records every non-ignored file,
+# so gitignored build artifacts are excluded and NEW files are included.
+tmp_index="$(mktemp)"
+GIT_INDEX_FILE="$tmp_index" git add -A
+tree="$(GIT_INDEX_FILE="$tmp_index" git write-tree)"
 # no-op if the snapshot tree is identical to base, else re-parent onto base:
 git diff --quiet "<base>^{tree}" "$tree" && { echo "no changes"; }   # -> exit 30
-new="$(git commit-tree "$tree" -p <base> -m "<task desc>")"           # clean one-commit increment
+new="$(git commit-tree "$tree" -p <base> -m "<task desc>")"          # clean one-commit increment
 git branch <branch> "$new"
 git --no-pager log --oneline <base>..<branch>
 git --no-pager diff --stat <base>..<branch>
 ```
 
-Sentinel → exit mapping: `DL_NOGIT`→`20`, `DL_NOOP`→`30`, `DL_COMMIT_FAIL`→`20`,
-`DL_BUNDLE_FAIL`→`20`, no `DL_BUNDLE_OK`→`20`. Re-parenting via `commit-tree`
-means the review branch shares history with `base`, so `base..branch` is exactly
-the task's diff (not a detached full-repo snapshot). `git bundle` (not
-`format-patch`) carries all objects including binaries. The argv stays small (no
-base64 bootstrap), so it never approaches `ARG_MAX`. The branch is created but
-**never merged** — review and merge it deliberately. `.dev-loop/` self-ignores
-via a `.gitignore` containing `*`, so the user's tracked `.gitignore` is never
-touched. (If the recorded `base` has been pruned locally, the snapshot is
-imported as an orphan branch with a warning instead.)
+Re-parenting via `commit-tree -p <base>` means the review branch shares history
+with `base`, so `base..branch` is exactly the task's diff (not a detached
+full-repo snapshot). The committer identity is taken from the worktree's
+`git config user.name`/`user.email` (falling back to a generic `dev-loop`
+identity). The branch is created but **never merged** — review and merge it
+deliberately. If the recorded `base` has been pruned locally, the snapshot is
+committed as an orphan (parentless) review commit with a warning instead.
 
 ### Status & reconciliation
 
@@ -224,10 +206,10 @@ build/test churn that causes context rot is dropped.
 | `dl-setup.sh` exits `20` on doctor | Run `crabbox doctor -provider incus` and fix what it reports (Incus not initialized, no remote, etc.). |
 | `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
-| Merge-back exit `20` (in-box snapshot failed) | Read the box output above the error. The box builds a throwaway repo (`git init`) and bundles an orphan snapshot — `.git` is intentionally NOT needed in the box. |
-| Merge-back exit `30` "no changes" | The box working tree is empty or identical to `base`. Confirm your edits are in the task **worktree** and tracked (`git add` new files), then re-run `dl-run.sh` so they sync up before merge-back. |
+| Merge-back exit `20` (no base/worktree, or worktree missing) | The task has no recorded `base`/`worktree=` annotation, or the worktree dir was deleted. Run `dl-box.sh <uuid>` first (or to recreate a pruned worktree), then retry. Merge-back is fully local — it never touches the box. |
+| Merge-back exit `30` "no changes" | The task **worktree** is identical to `base`. Confirm your edits actually landed in the worktree path (`worktree=` annotation), not the shared checkout. (Merge-back snapshots the whole worktree, so untracked non-ignored files DO count — but gitignored files never will.) |
 | Merge-back exit `30` "branch already exists" | Pass an explicit `<branch>` name, or delete the stale local branch. |
-| `bundle verify` fails locally | The bundle is corrupt/truncated (re-run merge-back). The orphan bundle has no base prerequisite, so a moved/pruned local `base` does NOT cause a verify failure — it only falls back to importing an orphan branch. |
+| Merge-back created an orphan (parentless) branch | The recorded `base` was pruned locally, so it could not be used as a parent. The snapshot is still complete; it just has no shared history with `main`. Re-fetch/restore the base commit if you need a clean `base..branch` diff. |
 | My edits didn't reach the box / merge-back | The task **worktree** (`worktree=` annotation) is the source of truth and syncs up every run, but only **tracked** files sync. Make sure you edited in the worktree path (not the shared checkout), `git add` new files, and don't edit inside the box. |
 | `dl-box.sh` exits `20` "could not create worktree" | The scratch branch `dl/<slug>` is already checked out in another worktree, or the path is occupied. Run `dl-status.sh` / `git worktree list`; clear a stale one with `git worktree remove --force <path>` then `git worktree prune`. |
 | `dl-run.sh`/`dl-merge-back.sh` exit `20` "recorded worktree is missing" | The worktree dir was deleted/pruned out from under the task. Re-run `dl-box.sh <uuid>` to recreate it on the same scratch branch, then retry. |

@@ -34,9 +34,8 @@ dl_die()  { local code="$1"; shift; dl_err "$*"; exit "$code"; }
 : "${INCUS_TYPE:=}"              # optional -incus-instance-type (container|vm)
 : "${INCUS_REMOTE:=}"            # optional -incus-remote
 : "${DEV_LOOP_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop}"
-: "${DEV_LOOP_BUNDLE_DIR:=.dev-loop}"   # repo-local, gitignored, for downloaded bundles
 : "${DEV_LOOP_WORKTREE_DIR:=${DEV_LOOP_STATE_DIR}/worktrees}"  # per-task git worktrees (outside the repo tree)
-export CRABBOX_PROVIDER DEV_LOOP_TTL DEV_LOOP_STALE DEV_LOOP_STATE_DIR DEV_LOOP_BUNDLE_DIR DEV_LOOP_WORKTREE_DIR
+export CRABBOX_PROVIDER DEV_LOOP_TTL DEV_LOOP_STALE DEV_LOOP_STATE_DIR DEV_LOOP_WORKTREE_DIR
 
 # Stable, attributable owner id. Distinctness between two agents as the same
 # Unix user requires exporting DEV_LOOP_OWNER (see SKILL.md Phase 0); the
