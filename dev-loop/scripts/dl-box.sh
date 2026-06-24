@@ -125,9 +125,13 @@ else
   warmout="$(mktemp "${TMPDIR:-/tmp}/dl-warm.XXXXXX")"
   trap 'rm -f "$warmout"' EXIT
   dl_log "warming box (slug=$slug ttl=$DEV_LOOP_TTL label=$label)"
-  if ! crabbox warmup -provider "$CRABBOX_PROVIDER" \
+  # Warm from the task's worktree so crabbox records repoRoot=<worktree>. dl-run.sh
+  # cd's into the same worktree before `crabbox run`; if the lease were warmed from
+  # the main checkout instead, repoRoot would mismatch and every run would demand
+  # `-reclaim`. Warming from the worktree keeps the two in agreement.
+  if ! ( cd "$wt" && crabbox warmup -provider "$CRABBOX_PROVIDER" \
         ${incus_flags[@]+"${incus_flags[@]}"} \
-        -slug "$slug" -ttl "$DEV_LOOP_TTL" >"$warmout" 2>&1; then
+        -slug "$slug" -ttl "$DEV_LOOP_TTL" ) >"$warmout" 2>&1; then
     cat "$warmout" >&2
     dl_die "$DL_PRECOND" "crabbox warmup failed (see output above)"
   fi
@@ -141,8 +145,8 @@ else
   if [ -z "$handle" ] && box_alive "$slug"; then handle="$slug"; fi
   if [ -z "$handle" ]; then
     cand="$(crabbox list -provider "$CRABBOX_PROVIDER" -json 2>/dev/null \
-      | jq -r --arg s "$slug" '.[]? | select((.slug // .Slug // .name // "")==$s)
-                                     | (.id // .ID // .name // .slug // "")' \
+      | jq -r --arg s "$slug" '.[]? | select((.labels.slug // .slug // .Slug // "")==$s)
+                                     | (.labels.lease // .lease // (.id|strings) // .ID // .name // "")' \
       | head -n1 || true)"
     if [ -n "$cand" ] && box_alive "$cand"; then handle="$cand"; fi
   fi

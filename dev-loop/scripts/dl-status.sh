@@ -68,7 +68,12 @@ had_lease=0
 while IFS=$'\t' read -r lid lslug llabel; do
   [ -n "$lid$lslug" ] || continue
   had_lease=1
-  ref="${REF_UUID[$lid]:-}"; [ -n "$ref" ] || ref="${REF_UUID[$lslug]:-}"
+  # Guard the array subscript: a lease can report an empty id (only a slug), and
+  # `${REF_UUID[]}` is a fatal "bad array subscript" under `set -u`. Only index
+  # with a non-empty key, falling back from id to slug.
+  ref=""
+  [ -n "$lid" ] && ref="${REF_UUID[$lid]:-}"
+  if [ -z "$ref" ] && [ -n "$lslug" ]; then ref="${REF_UUID[$lslug]:-}"; fi
   if [ -n "$ref" ]; then
     printf '  %-28s  task %s  %s\n' "${lid:-$lslug}" "${ref:0:8}" "${llabel}"
   else
@@ -76,12 +81,16 @@ while IFS=$'\t' read -r lid lslug llabel; do
     ORPHANS+=("${lid:-$lslug}")
   fi
 done < <(printf '%s' "$leases_json" \
-  | jq -r '.[]? | [ (.id//.ID//.name//.slug//.Slug//""), (.slug//.Slug//""), (.label//.Label//"") ] | @tsv' 2>/dev/null || true)
+  | jq -r '.[]?
+      | [ (.labels.lease // .lease // (.id|strings) // .ID // .name // ""),
+          (.labels.slug  // .slug  // .Slug // ""),
+          (.name // .label // .Label // "") ]
+      | @tsv' 2>/dev/null || true)
 [ "$had_lease" -eq 1 ] || printf '  (none)\n'
 
 # Dangling box refs: a pending task points at a lease that is not live.
 mapfile -t live_ids < <(printf '%s' "$leases_json" \
-  | jq -r '.[]? | (.id//.ID//.name//.slug//.Slug//""), (.slug//.Slug//"")' 2>/dev/null | sort -u || true)
+  | jq -r '.[]? | (.labels.lease // .lease // (.id|strings) // .ID // .name // ""), (.labels.slug // .slug // .Slug // "")' 2>/dev/null | sort -u || true)
 is_live() { local h="$1" x; for x in ${live_ids[@]+"${live_ids[@]}"}; do [ "$x" = "$h" ] && return 0; done; return 1; }
 
 printf '\nDangling box refs:\n'
