@@ -2,9 +2,12 @@
 
 Verbatim recipes, the environment-variable table, the exit-code contract, and
 troubleshooting. SKILL.md is the lean workflow; read this when a step fails or
-you need exact behavior. All scripts are in `scripts/`, source `dl-common.sh`,
-use `set -euo pipefail`, send diagnostics to stderr, and accept `--dry-run` on
-mutating operations.
+you need exact behavior. All scripts are bundled with the installed dev-loop
+skill, not with the target repo. In command examples, `/path/to/dev-loop-skill`
+means the installed skill directory containing `SKILL.md`; invoke scripts from
+there while keeping the target repo checkout as the current working directory.
+The scripts source `dl-common.sh`, use `set -euo pipefail`, send diagnostics to
+stderr, and accept `--dry-run` on mutating operations.
 
 ## Exit-code contract
 
@@ -78,8 +81,8 @@ Outcomes: claimed → `0` + uuid; owned by another → `10`; bad/non-pending tas
 ### Stale-claim reclaim (never silent)
 
 ```sh
-scripts/dl-claim.sh <uuid> --steal-after 4h      # specific stale task
-scripts/dl-claim.sh --steal-after 4h             # auto-pick incl. stale actives
+/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid> --steal-after 4h      # specific stale task
+/path/to/dev-loop-skill/scripts/dl-claim.sh --steal-after 4h             # auto-pick incl. stale actives
 ```
 
 Only an active claim whose `start` is at least `<dur>` old is reclaimable; the
@@ -113,10 +116,10 @@ catch: **a NEW file you create is untracked, so `git add` it (in the worktree) o
 it will not sync up** (and merge-back will not see it).
 
 ```sh
-scripts/dl-run.sh "$uuid" -- bash -lc 'apt-get update && make'   # syncs worktree up
-scripts/dl-run.sh "$uuid" -- bash -lc 'make test'                # syncs again (latest edits)
-scripts/dl-run.sh "$uuid" --no-sync -- bash -lc 'make test'      # fast re-run, skip upload
-scripts/dl-run.sh "$uuid" -sync-only --                          # just sync, run nothing
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'apt-get update && make'   # syncs worktree up
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make test'                # syncs again (latest edits)
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" --no-sync -- bash -lc 'make test'      # fast re-run, skip upload
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -sync-only --                          # just sync, run nothing
 ```
 
 Extra flags before `--` are passed through to `crabbox run` (e.g. `-allow-env`,
@@ -160,7 +163,7 @@ committed as an orphan (parentless) review commit with a warning instead.
 ### Status & reconciliation
 
 ```sh
-scripts/dl-status.sh
+/path/to/dev-loop-skill/scripts/dl-status.sh
 ```
 Read-only. Reports active claims (owner, age, `*` = yours, `[STALE]` at
 `DEV_LOOP_STALE`), live leases from `crabbox list -json`, **orphan** leases (a
@@ -236,13 +239,13 @@ build/test churn that causes context rot is dropped.
 | `dl-setup.sh` exits `20` on doctor | Run `crabbox doctor -provider incus` and fix what it reports (Incus not initialized, no remote, etc.). |
 | `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
-| Merge-back exit `20` (no base/worktree, or worktree missing) | The task has no recorded `base`/`worktree=` annotation, or the worktree dir was deleted. Run `dl-box.sh <uuid>` first (or to recreate a pruned worktree), then retry. Merge-back is fully local — it never touches the box. |
+| Merge-back exit `20` (no base/worktree, or worktree missing) | The task has no recorded `base`/`worktree=` annotation, or the worktree dir was deleted. Run `/path/to/dev-loop-skill/scripts/dl-box.sh <uuid>` first (or to recreate a pruned worktree), then retry. Merge-back is fully local — it never touches the box. |
 | Merge-back exit `30` "no changes" | The task **worktree** is identical to `base`. Confirm your edits actually landed in the worktree path (`worktree=` annotation), not the shared checkout. (Merge-back snapshots the whole worktree, so untracked non-ignored files DO count — but gitignored files never will.) |
 | Merge-back exit `30` "branch already exists" | Pass an explicit `<branch>` name, or delete the stale local branch. |
 | Merge-back created an orphan (parentless) branch | The recorded `base` was pruned locally, so it could not be used as a parent. The snapshot is still complete; it just has no shared history with `main`. Re-fetch/restore the base commit if you need a clean `base..branch` diff. |
 | My edits didn't reach the box / merge-back | The task **worktree** (`worktree=` annotation) is the source of truth and syncs up every run, but only **tracked** files sync. Make sure you edited in the worktree path (not the shared checkout), `git add` new files, and don't edit inside the box. |
 | `dl-box.sh` exits `20` "could not create worktree" | The scratch branch `dl/<slug>` is already checked out in another worktree, or the path is occupied. Run `dl-status.sh` / `git worktree list`; clear a stale one with `git worktree remove --force <path>` then `git worktree prune`. |
-| `dl-run.sh`/`dl-merge-back.sh` exit `20` "recorded worktree is missing" | The worktree dir was deleted/pruned out from under the task. Re-run `dl-box.sh <uuid>` to recreate it on the same scratch branch, then retry. |
+| `dl-run.sh`/`dl-merge-back.sh` exit `20` "recorded worktree is missing" | The worktree dir was deleted/pruned out from under the task. Re-run `/path/to/dev-loop-skill/scripts/dl-box.sh <uuid>` to recreate it on the same scratch branch, then retry. |
 | Worktree flagged ORPHAN in `dl-status.sh` | A worktree left by a completed/released task. Remove it: `git worktree remove --force <path>` then `git worktree prune` (the registration alone clears with just `git worktree prune`). |
 | Orphan lease in `dl-status.sh` | A leaked box. Stop it: `crabbox stop -provider <p> -id <id>`. |
 | Secrets uploaded to the box | Add them to `.crabboxignore`; review with `crabbox sync-plan`. Inject env only via crabbox `-allow-env`/`-env-from-profile`. |

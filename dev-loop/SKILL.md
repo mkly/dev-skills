@@ -45,16 +45,19 @@ git worktree is snapshotted into a new local branch for review.
 - **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
   precondition/usage · `30` merge-back empty/conflict/branch-collision.
 
-All scripts live in `scripts/` next to this file. They are idempotent and
-re-runnable; pass `--dry-run` to any mutating script to preview. Run them from
-inside the target repo checkout. Full recipes, the env-var table, the exit-code
-table, and troubleshooting are in **reference.md** — read it when a step fails or
-when you need exact flags.
+The helper scripts are bundled with the installed dev-loop skill, not with the
+target repo. In command examples, `/path/to/dev-loop-skill` means the installed
+skill directory containing this `SKILL.md`; invoke scripts from there while
+keeping the target repo checkout as the current working directory. Do not assume
+the target repo contains `scripts/dl-*.sh`. The scripts are idempotent and
+re-runnable; pass `--dry-run` to any mutating script to preview. Full recipes,
+the env-var table, the exit-code table, and troubleshooting are in
+**reference.md** — read it when a step fails or when you need exact flags.
 
 ## Phase 0 — Setup (idempotent, once per machine)
 
 ```sh
-scripts/dl-setup.sh
+/path/to/dev-loop-skill/scripts/dl-setup.sh
 ```
 
 Ensures the `assignee` UDA exists (timestamped `~/.taskrc` backup first), checks
@@ -105,8 +108,8 @@ the work on that branch instead of plain `main`.
 ## Phase 2 — Claim (the lock)
 
 ```sh
-uuid="$(scripts/dl-claim.sh)"          # auto-pick highest-urgency READY task
-# or: uuid="$(scripts/dl-claim.sh <uuid>)"   # claim a specific task
+uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh)"          # auto-pick highest-urgency READY task
+# or: uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid>)"   # claim a specific task
 ```
 
 `dl-claim.sh` acquires an OS `flock` (a true mutex on this single-host
@@ -125,9 +128,9 @@ Always capture the uuid from stdout and use it for every subsequent phase.
 ## Phase 3 — Work in the box (one lease per task)
 
 ```sh
-scripts/dl-box.sh "$uuid"                          # warm or reuse the task's box
-scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
-scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
+/path/to/dev-loop-skill/scripts/dl-box.sh "$uuid"                          # warm or reuse the task's box
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
 ```
 
 - `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
@@ -152,8 +155,8 @@ scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
 ## Phase 4 — Merge back to a NEW local branch
 
 ```sh
-branch="$(scripts/dl-merge-back.sh "$uuid")"        # default: review/<slug>
-# or: scripts/dl-merge-back.sh "$uuid" review/my-name
+branch="$(/path/to/dev-loop-skill/scripts/dl-merge-back.sh "$uuid")"        # default: review/<slug>
+# or: /path/to/dev-loop-skill/scripts/dl-merge-back.sh "$uuid" review/my-name
 ```
 
 Merge-back is a purely **local** git operation on the task's worktree — no box
@@ -169,7 +172,8 @@ records `branch=` on the task.
 - Exit `30` = nothing to merge (worktree identical to base) / branch already
   exists → report it; pass an explicit `<branch>` to resolve a name collision.
 - Exit `20` = no recorded base/worktree, or the worktree dir is missing → run
-  `dl-box.sh "$uuid"` first (or to recreate a pruned worktree).
+  `/path/to/dev-loop-skill/scripts/dl-box.sh "$uuid"` first (or to recreate
+  a pruned worktree).
 - It does **not** merge the branch. Show the user `git log --oneline base..branch`
   and `git diff --stat` (the script prints both) and let them review and merge.
 - It records a `commits=<base>..<head> (n=N)` annotation so the produced commits
@@ -181,7 +185,7 @@ records `branch=` on the task.
 # Record what was done before completing — a durable, human-readable note on the
 # task itself (commits are already linked by merge-back's commits= annotation):
 task "$uuid" annotate "summary: <what changed and why, in 1–2 lines>"
-scripts/dl-done.sh "$uuid"        # task done + stop box + annotate (default)
+/path/to/dev-loop-skill/scripts/dl-done.sh "$uuid"        # task done + stop box + annotate (default)
 ```
 
 Annotations are Taskwarrior's note mechanism — timestamped freeform text on a
@@ -195,10 +199,10 @@ for later review via `task <uuid> info`.
 worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
 `review/<slug>` branch is shared in the repo and is always KEPT for review.
 
-- **Abandon instead of complete:** `scripts/dl-release.sh "$uuid" [--stop-box]`
+- **Abandon instead of complete:** `/path/to/dev-loop-skill/scripts/dl-release.sh "$uuid" [--stop-box]`
   stops the task and clears `assignee` so another owner can claim it; the task
   stays pending.
-- **Reconcile:** `scripts/dl-status.sh` (read-only) lists active claims with
+- **Reconcile:** `/path/to/dev-loop-skill/scripts/dl-status.sh` (read-only) lists active claims with
   owner + age + `[STALE]`, live Crabbox leases, **orphan** leases (running but no
   pending task references them), dangling box refs, per-task worktrees (flagging
   ORPHAN worktrees left by completed/released tasks and MISSING ones a pending
@@ -217,8 +221,8 @@ worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
 
 Repeat Phases 2–5 per task, honoring dependencies (claim only `+READY` tasks).
 When `dl-claim.sh` auto-pick returns empty, the goal's ready work is done — run
-`dl-status.sh` to confirm no orphan leases remain, then report what landed on
-which review branches.
+`/path/to/dev-loop-skill/scripts/dl-status.sh` to confirm no orphan leases
+remain, then report what landed on which review branches.
 
 **After a review branch is merged,** prompt the user to delete it:
 
