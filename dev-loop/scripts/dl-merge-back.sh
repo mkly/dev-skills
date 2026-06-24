@@ -151,7 +151,7 @@ set +e
 "${run[@]}" >"$runout"
 rc="$?"
 set -e
-cat "$runout"   # surface the box's own stdout (incl. the DL_* result) to the human
+cat "$runout" >&2   # surface the box's own stdout (incl. the DL_* result) to the human on STDERR — our stdout must stay the branch name alone
 
 # Interpret box outcome (sentinels take precedence over the raw exit code).
 if   grep -q '\bDL_NOGIT\b'       "$runout"; then dl_die "$DL_PRECOND" "could not init a scratch repo inside the box (see output above)"
