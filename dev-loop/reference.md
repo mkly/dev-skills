@@ -174,6 +174,25 @@ dir is gone — re-run `dl-box.sh` to recreate it). Act on findings with
 `dl-release.sh`, `dl-done.sh`, the printed `crabbox stop` hint, or
 `git worktree prune`.
 
+Finally, a **Review branches** section reports the pipeline's *output*. Git is
+ground truth that a branch exists; the producing task is found by reverse-mapping
+its `branch=` annotation across **all** tasks (including completed — the producer
+is usually completed by the time you look). The candidate set is every `branch=`
+value ∪ every `refs/heads/review/*` branch, so a custom branch name and a review
+branch whose producing task lost its annotation are both caught. For each branch
+it reports merge state vs the current checkout:
+
+- `MERGED into <cur>` — the branch tip is an ancestor of HEAD (reviewed/landed);
+  the line includes the exact `git branch -d <branch>` to clean it up (deletion
+  stays a human decision).
+- `unmerged (+N vs <cur>)` — still awaiting review, `N` commits ahead.
+- `ORPHAN` — a `review/*` branch no task records (annotation lost or hand-made).
+- `GONE` — a task recorded a `branch=` that no longer exists (merged + deleted).
+
+This makes "what's still waiting to merge" answerable at a glance: scan for the
+`unmerged` lines. The section needs a git work tree; outside one it prints
+`(not inside a git repository)`.
+
 ### Recoverable state (annotations, not extra UDAs)
 
 To keep config to the single `assignee` UDA, machine state lives in append-only
@@ -186,6 +205,17 @@ merged/renamed/deleted), plus free-form `dev-loop: <event> (by <owner>)`
 lifecycle notes. A crashed/resumed loop reconstructs context from these — and
 because the `worktree=` path is durable, a resumed loop re-enters the same
 isolated tree (or `dl-box.sh` recreates it if it was pruned).
+
+Annotations are also where a task's **inputs** are wired at decomposition time. A
+downstream task usually builds on an upstream one's *output* — the
+`review/<producer-slug>` branch the producer merges back. Record that link in two
+parts so a resumed loop (which rehydrates only from Taskwarrior) can reconstruct
+it: `task <downstream> modify depends:<producer>` keeps it out of `+READY` until
+the producer is done, and `task <downstream> annotate "input: review/<producer-slug>"`
+names the concrete branch to start from. When you claim the downstream task, read
+its `input:` annotation and base the work on that branch instead of plain `main`;
+the producer records the exact branch name as `branch=` once it merges back, and
+`dl-status.sh`'s "Review branches" section reverse-maps it.
 
 Annotations are also the place for **human-readable task notes**: a `summary:`
 annotation (added before `dl-done.sh`) captures what was done and why. Because

@@ -85,6 +85,23 @@ task project:<goal-slug> export | jq -r '.[] | "\(.uuid[0:8])  \(.description)"'
 
 Keep tasks small enough that one fits in one box and one review branch.
 
+**Wire each task to its inputs explicitly.** A downstream task usually needs the
+*output* of an upstream one — the `review/<producer-slug>` branch the producer
+merges back. Encode that link at decomposition time, in two parts, so a
+resumed/crashed loop (which rehydrates only from Taskwarrior) can reconstruct it:
+
+```sh
+task <downstream> modify depends:<producer>                     # ordering + +READY gating
+task <downstream> annotate "input: review/<producer-slug>"      # WHICH branch to build on
+```
+
+`depends:` keeps the downstream task out of `+READY` until the producer is done;
+the `input:` annotation names the concrete branch to start from (its slug is
+`dl-<producer-short>-<desc>`; the producer records the exact name as `branch=`
+once it merges back, and `dl-status.sh`'s "Review branches" section reverse-maps
+it). When you claim the downstream task, read its `input:` annotation and base
+the work on that branch instead of plain `main`.
+
 ## Phase 2 — Claim (the lock)
 
 ```sh
@@ -183,10 +200,18 @@ worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
   stays pending.
 - **Reconcile:** `scripts/dl-status.sh` (read-only) lists active claims with
   owner + age + `[STALE]`, live Crabbox leases, **orphan** leases (running but no
-  pending task references them), dangling box refs, and per-task worktrees
-  (flagging ORPHAN worktrees left by completed/released tasks and MISSING ones a
-  pending task still records). Run it to find leaks or stuck claims, then act with
-  `dl-release.sh` / `dl-done.sh` / `crabbox stop` / `git worktree prune`.
+  pending task references them), dangling box refs, per-task worktrees (flagging
+  ORPHAN worktrees left by completed/released tasks and MISSING ones a pending
+  task still records), and a **Review branches** section — the pipeline's
+  *output*. The latter reverse-maps every `branch=` annotation (across ALL tasks,
+  including completed) and every `refs/heads/review/*` branch to its producing
+  task, and reports merge state vs the current checkout: `MERGED` (tip is an
+  ancestor of HEAD → reviewed/landed, safe to `git branch -d`), `unmerged
+  (+N)` (awaiting review), `ORPHAN` (a review branch no task records), and `GONE`
+  (a task recorded a branch that no longer exists — merged + deleted). Run it to
+  find leaks or stuck claims **and to answer "what's still waiting to merge"**,
+  then act with `dl-release.sh` / `dl-done.sh` / `crabbox stop` /
+  `git worktree prune`.
 
 ## Loop
 
