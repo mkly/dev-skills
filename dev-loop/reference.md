@@ -226,11 +226,13 @@ annotation (added before `dl-done.sh`) captures what was done and why. Because
 each finished task self-describing — inspect it later with `task <uuid> info` or
 `task <uuid> export | jq -r '.annotations[]?.description'`.
 
-Because state is durable here and not in the agent's head, the orchestrator
-should **compact its context between tasks** (see SKILL.md "Loop"): a freshly
-compacted iteration rehydrates per-task state from `task <uuid> export` and
-`dl-status.sh` exactly as a resumed loop would, so nothing is lost while stale
-build/test churn that causes context rot is dropped.
+Because state is durable here and not in the agent's head, run long loops with
+the host agent/runtime configured for periodic automatic compaction (see
+SKILL.md "Loop"). Configuration and trigger mechanisms vary by agent, so the
+skill does not assume a specific command or force compaction at task boundaries.
+Regardless of when compaction occurs, each new task rehydrates its state from
+`task <uuid> export` and `dl-status.sh` instead of relying on stale build/test
+churn from prior tasks.
 
 ## Troubleshooting
 

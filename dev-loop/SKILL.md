@@ -234,16 +234,24 @@ Present this as a one-liner the user can run (or confirm you should run). Do not
 delete automatically — branch deletion is a destructive action that requires
 explicit human approval.
 
-**Compact context between tasks (prevent context rot).** One task's build/test/
-debug churn is worthless to the next, and carrying it forward degrades every
-later task. After each Phase 5 and before the next Phase 2, **compact the
-context** (e.g. `/compact`) down to just: the goal/project slug, which tasks
-remain, and the review branches landed so far. This is safe because all
-per-task state is durable in Taskwarrior annotations (`box=`, `base=`,
-`worktree=`, `branch=`, `commits=`) — the next iteration rehydrates everything it needs from
-`task <uuid> export` and `dl-status.sh`, exactly as a crashed/resumed loop
-would. Treat each task as a fresh, near-stateless iteration: claim → reconstruct
-context from annotations → work → merge-back → done → compact.
+**Use automatic context compaction (prevent context rot).** Run long loops with
+the host agent/runtime configured to compact after roughly 64k tokens of context
+growth. If supported, count only growth after the persistent system/skill
+instruction prefix so that prefix does not immediately consume the threshold.
+Use 32–48k only when stale context remains a problem. Configuration names and
+when changes take effect vary by agent; keep vendor-specific settings out of
+this skill. Automatic compaction is token-driven and may occur during a task or
+after several tasks, not specifically after Phase 5. If the host cannot
+configure or trigger compaction, continue using the durable-state discipline
+below and do not claim that boundary compaction occurred.
+
+At every task boundary, keep the logical workflow near-stateless anyway: record
+the Phase 5 `summary:`, then reconstruct the next task from `task <uuid> export`
+and `dl-status.sh` rather than relying on remembered build/test/debug churn.
+Per-task state is durable in Taskwarrior annotations (`box=`, `base=`,
+`worktree=`, `branch=`, `commits=`), so periodic automatic compaction can safely
+discard transient details. Treat each task as: claim → reconstruct from
+annotations → work → merge-back → done → record durable state.
 
 Do not re-document Crabbox here — defer to `crabbox <cmd> --help` and the
 crabbox-generated skill at `.agents/skills/crabbox/` when present.

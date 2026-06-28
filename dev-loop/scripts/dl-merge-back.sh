@@ -97,6 +97,9 @@ fi
 # the reviewable source state.
 tmp_index="$(mktemp "${TMPDIR:-/tmp}/dl-mb-index.XXXXXX")"
 trap 'rm -f "$tmp_index"' EXIT
+# Git treats a missing index as empty, but rejects mktemp's zero-byte file as
+# corrupt. Keep the reserved path and remove the placeholder before staging.
+rm -f "$tmp_index"
 GIT_INDEX_FILE="$tmp_index" git add -A
 snap_tree="$(GIT_INDEX_FILE="$tmp_index" git write-tree)" \
   || dl_die "$DL_PRECOND" "failed to snapshot the worktree tree"
