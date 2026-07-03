@@ -23,14 +23,15 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-run.sh <uuid> [--no-sync|--resync] [crabbox run flags...] -- <cmd...>
+Usage: dl-run.sh <uuid> [--force] [--no-sync|--resync] [crabbox run flags...] -- <cmd...>
 
   --no-sync    skip the upload this run (default is to sync the local tree up)
   --resync     accepted for compatibility; syncing up is already the default
+  --force      bypass owner check
   --dry-run    log the crabbox invocation instead of running it
 
-Forwards the in-box command's exit code. Exit 20 if the task has no warmed box
-(run dl-box.sh first).
+Forwards the in-box command's exit code. Exit 10 if the task is unclaimed or
+owned by another owner; exit 20 if the task has no warmed box (run dl-box.sh first).
 EOF
 }
 
@@ -38,13 +39,14 @@ EOF
 UUID="$1"; shift
 case "$UUID" in -h|--help) usage; exit 0 ;; esac
 
-EXTRA=(); CMD=(); seen_sep=0; RESYNC=0; FORCE_NOSYNC=0
+EXTRA=(); CMD=(); seen_sep=0; RESYNC=0; FORCE_NOSYNC=0; FORCE=0
 while [ "$#" -gt 0 ]; do
   if [ "$seen_sep" -eq 1 ]; then CMD+=("$1"); shift; continue; fi
   case "$1" in
     --)        seen_sep=1 ;;
     --resync)  RESYNC=1 ;;
     --no-sync) FORCE_NOSYNC=1 ;;
+    --force)   FORCE=1 ;;
     --dry-run) DL_DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     *)         EXTRA+=("$1") ;;
@@ -54,6 +56,7 @@ done
 
 dl_require jq task crabbox
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
+[ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
 
 handle="$(dl_anno_get "$UUID" box)"
 [ -n "$handle" ] || dl_die "$DL_PRECOND" "task $UUID has no warmed box; run dl-box.sh $UUID first"
@@ -69,6 +72,9 @@ cd "$wt" || dl_die "$DL_PRECOND" "could not enter worktree: $wt"
 # Require a command unless this is an explicit sync-only / flags-only invocation.
 sync_only=0
 for e in ${EXTRA[@]+"${EXTRA[@]}"}; do [ "$e" = "-sync-only" ] && sync_only=1; done
+if [ "$FORCE_NOSYNC" -eq 1 ] && [ "$sync_only" -eq 1 ]; then
+  dl_die "$DL_PRECOND" "--no-sync cannot be combined with -sync-only"
+fi
 if [ "${#CMD[@]}" -eq 0 ] && [ "$sync_only" -eq 0 ]; then
   usage; dl_die "$DL_PRECOND" "no command given (expected '<uuid> ... -- <cmd>')"
 fi

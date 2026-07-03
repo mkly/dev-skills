@@ -35,7 +35,32 @@ dl_require git jq flock task crabbox
 [ "$CRABBOX_PROVIDER" = "incus" ] && dl_require incus
 
 # 2. assignee UDA (check-before-write; back up taskrc only when changing it).
-TASKRC_FILE="${TASKRC:-$HOME/.taskrc}"
+taskrc_candidates() {
+  [ -n "${TASKRC:-}" ] && printf '%s\n' "$TASKRC"
+  task diagnostics 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*(Config file|Configuration file)[^:]*:[[:space:]]*(.*)$/\2/ip' \
+    | sed 's/^"//; s/"$//' || true
+  task _show 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*(rc\.taskrc|taskrc|config)[[:space:]=:]+(.*)$/\2/ip' \
+    | sed 's/^"//; s/"$//' || true
+  printf '%s\n' "$HOME/.taskrc"
+  printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/task/taskrc"
+}
+
+resolve_taskrc_file() {
+  local c fallback=""
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    [ -n "$fallback" ] || fallback="$c"
+    if [ -f "$c" ]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done < <(taskrc_candidates)
+  printf '%s\n' "$fallback"
+}
+
+TASKRC_FILE="$(resolve_taskrc_file)"
 current_type="$(task _get rc.uda.assignee.type 2>/dev/null || true)"
 if [ "$current_type" = "string" ]; then
   dl_log "assignee UDA already configured"

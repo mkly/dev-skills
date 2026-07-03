@@ -17,6 +17,9 @@ in `scripts/`.
 
 ## Prerequisites
 
+Linux only. The scripts use GNU `date -d`, `flock` from util-linux, and bash 4+
+features such as `mapfile` and associative arrays.
+
 | Tool | Why | Verified with |
 |------|-----|---------------|
 | [Taskwarrior](https://taskwarrior.org/) (`task`) | task store **and** the claim lock | `2.6.2` (file-based, no taskd needed) |
@@ -65,7 +68,8 @@ uuid="$($S/dl-claim.sh)"                          # Phase 2: claim (the lock)
 $S/dl-box.sh "$uuid"                              # Phase 3: warm an Incus box
 $S/dl-run.sh "$uuid" -- bash -lc 'make && make test'
 branch="$($S/dl-merge-back.sh "$uuid")"           # Phase 4: → new local branch
-git log --oneline "main..$branch"                # review (never auto-merged)
+base="$(task "$uuid" export | jq -r '.[0].annotations | map(.description) | map(select(startswith("base="))) | last | .[5:]')"
+git log --oneline "$base..$branch"               # review (script also prints log/stat)
 $S/dl-done.sh "$uuid"                             # Phase 5: complete + free the box
 ```
 
@@ -83,12 +87,12 @@ distinct value first — see `reference.md`.
   *local* review branch — a purely local operation, no box round-trip.
 - **No secrets into the box** except via Crabbox's own `-allow-env` /
   `-env-from-profile`. Review `.crabboxignore` / `crabbox sync-plan`.
-- **Leak control.** Every lease gets a `-ttl` and a `-label`; `dl-status.sh`
-  flags orphan leases and stale claims.
+- **Leak control.** Every lease gets a `-ttl`; runs are labeled, and
+  `dl-status.sh` flags orphan leases and stale claims.
 
 The only Taskwarrior config it adds is a single `assignee` UDA (with a
-timestamped `~/.taskrc` backup). All other machine state lives in task
-annotations, so nothing else is bolted onto your Taskwarrior setup.
+timestamped backup of the active taskrc when one exists). All other machine state
+lives in task annotations, so nothing else is bolted onto your Taskwarrior setup.
 
 ## License
 

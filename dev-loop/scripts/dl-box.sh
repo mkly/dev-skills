@@ -2,12 +2,12 @@
 # dl-box.sh — Phase 3: warm (or reuse) one Incus box lease for a task, and
 # create the per-task git worktree the agent edits in.
 #
-#   dl-box.sh <uuid> [--dry-run]
+#   dl-box.sh <uuid> [--base <ref>] [--force] [--dry-run]
 #
 # If the task already records a live box (box=<handle> annotation, confirmed via
 # `crabbox status`), that handle is reused. Otherwise a new lease is warmed with
 # a deterministic friendly slug. The resolved handle is printed to stdout and
-# recorded as box=<handle>; the current local HEAD is recorded as base=<sha>
+# recorded as box=<handle>; the resolved base commit is recorded as base=<sha>
 # (the merge-back diff base). One lease per task — never leaks a second.
 #
 # It also creates a dedicated git worktree on a scratch branch dl/<slug>, rooted
@@ -22,17 +22,24 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-box.sh <uuid> [--dry-run] [-h|--help]
+Usage: dl-box.sh <uuid> [--base <ref>] [--force] [--dry-run] [-h|--help]
 
 Warm or reuse the Incus box for a claimed task. Prints the box handle on stdout.
-Records box=<handle>, base=<local HEAD sha>, and worktree=<path> as annotations,
+Records box=<handle>, base=<resolved sha>, and worktree=<path> as annotations,
 and creates a per-task git worktree (branch dl/<slug>) for the agent to edit in.
+
+  --base <ref>  override the first-run diff base (else latest input: annotation,
+                else current HEAD)
+  --force       bypass owner check
 EOF
 }
 
-UUID=""
+UUID=""; EXPLICIT_BASE=""; FORCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --base) shift; [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--base needs a ref"; }
+            EXPLICIT_BASE="$1" ;;
+    --force) FORCE=1 ;;
     --dry-run) DL_DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     -*) usage; dl_die "$DL_PRECOND" "unknown flag: $1" ;;
@@ -46,6 +53,7 @@ done
 dl_require git jq task crabbox
 dl_in_git_repo
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
+[ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
 
 desc="$(dl_task_field "$UUID" '.description // ""')"
 project="$(dl_task_field "$UUID" '.project // ""')"
@@ -56,6 +64,27 @@ label="${project:-dev-loop}/${UUID}"
 box_alive() {
   [ -n "$1" ] || return 1
   crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
+}
+
+# input_ref <uuid> — latest "input: <ref>" annotation, or empty.
+input_ref() {
+  local uuid="$1"
+  dl_task_export "$uuid" \
+    | jq -r '
+        (.[0].annotations // [])
+        | map(.description)
+        | map(select(startswith("input:")))
+        | last // ""
+        | sub("^input:[[:space:]]*"; "")
+      ' 2>/dev/null
+}
+
+# resolve_base_ref <ref> <source> — print commit sha or die with context.
+resolve_base_ref() {
+  local ref="$1" source="$2" sha
+  sha="$(git rev-parse --verify "${ref}^{commit}" 2>/dev/null || true)"
+  [ -n "$sha" ] || dl_die "$DL_PRECOND" "cannot resolve ${source} base ref '$ref' to a commit"
+  printf '%s\n' "$sha"
 }
 
 # ensure_worktree <path> <branch> <base> — make sure a live per-task worktree
@@ -92,8 +121,19 @@ base="$(dl_anno_get "$UUID" base)"
 had_base=1
 if [ -z "$base" ]; then
   had_base=0
-  base="$(git rev-parse HEAD 2>/dev/null || true)"
-  [ -n "$base" ] || dl_die "$DL_PRECOND" "repository has no commits; make an initial commit before warming a box"
+  if [ -n "$EXPLICIT_BASE" ]; then
+    base="$(resolve_base_ref "$EXPLICIT_BASE" "--base")"
+  else
+    inref="$(input_ref "$UUID")"
+    if [ -n "$inref" ]; then
+      base="$(resolve_base_ref "$inref" "input:")"
+    else
+      base="$(git rev-parse HEAD 2>/dev/null || true)"
+      [ -n "$base" ] || dl_die "$DL_PRECOND" "repository has no commits; make an initial commit before warming a box"
+    fi
+  fi
+elif [ -n "$EXPLICIT_BASE" ]; then
+  dl_warn "task already records base=${base:0:12}; ignoring --base '$EXPLICIT_BASE'"
 fi
 
 wbranch="dl/${slug}"

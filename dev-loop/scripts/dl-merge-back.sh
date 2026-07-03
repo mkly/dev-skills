@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dl-merge-back.sh — Phase 4: bring a task's work back as a NEW local branch.
 #
-#   dl-merge-back.sh <uuid> [<branch>] [--dry-run]
+#   dl-merge-back.sh <uuid> [<branch>] [--force] [--dry-run]
 #
 # The task's git worktree (recorded as worktree=, rooted at the recorded base) is
 # the single source of truth: the agent edits there and the box is a build/test
@@ -26,9 +26,10 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-merge-back.sh <uuid> [<branch>] [--dry-run] [-h|--help]
+Usage: dl-merge-back.sh <uuid> [<branch>] [--force] [--dry-run] [-h|--help]
 
   <branch>    target local review branch (default: review/<task-slug>)
+  --force     bypass owner check
   --dry-run   log what would happen instead of creating the branch
 
 Creates a NEW local branch from the task worktree's working tree, re-parented
@@ -38,9 +39,10 @@ Exit: 0 ok, 20 precondition, 30 no-op (identical to base) / branch already exist
 EOF
 }
 
-UUID=""; BRANCH=""
+UUID=""; BRANCH=""; FORCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --force) FORCE=1 ;;
     --dry-run) DL_DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     -*) usage; dl_die "$DL_PRECOND" "unknown flag: $1" ;;
@@ -55,6 +57,7 @@ done
 dl_require git jq task
 dl_in_git_repo
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
+[ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
 
 base="$(dl_anno_get "$UUID" base)"
 [ -n "$base" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded base; run dl-box.sh $UUID first"
@@ -72,13 +75,6 @@ slug="$(dl_slug "$UUID" "$desc")"
 : "${BRANCH:=review/${slug}}"        # the local review branch we create
 msg="${desc:-dev-loop task $UUID}"
 
-# Fail fast on a local branch collision (before doing any work).
-current="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
-if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
-  dl_die "$DL_MERGE" "local branch '${BRANCH}' already exists; pass an explicit <branch> name"
-fi
-[ "$BRANCH" != "$current" ] || dl_die "$DL_MERGE" "refusing to overwrite the current branch '${BRANCH}'; choose another"
-
 # Preserve the local committer identity on the produced commit; fall back to a
 # generic dev-loop identity when git has no global user configured.
 author_name="$(git config user.name 2>/dev/null || true)";  : "${author_name:=dev-loop}"
@@ -90,20 +86,24 @@ if [ -n "$DL_DRY_RUN" ]; then
   exit "$DL_OK"
 fi
 
-# Stage the entire working tree into a THROWAWAY index (never touching the task's
-# real index), then write that tree. `git add -A` against an empty index records
-# every non-ignored file present in the worktree, so gitignored build artifacts
-# are excluded and NEW files are included automatically — the snapshot is exactly
-# the reviewable source state.
-tmp_index="$(mktemp "${TMPDIR:-/tmp}/dl-mb-index.XXXXXX")"
-trap 'rm -f "$tmp_index"' EXIT
-# Git treats a missing index as empty, but rejects mktemp's zero-byte file as
-# corrupt. Keep the reserved path and remove the placeholder before staging.
-rm -f "$tmp_index"
-GIT_INDEX_FILE="$tmp_index" git add -A
-snap_tree="$(GIT_INDEX_FILE="$tmp_index" git write-tree)" \
-  || dl_die "$DL_PRECOND" "failed to snapshot the worktree tree"
-[ -n "$snap_tree" ] || dl_die "$DL_PRECOND" "snapshot produced no tree"
+snap_tree="$(dl_worktree_snapshot_tree "$wt")"
+
+# True idempotency: an exact re-run against the same already-created branch is
+# success. Any other existing branch remains a collision.
+current="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
+if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+  tip="$(git rev-parse "refs/heads/${BRANCH}" 2>/dev/null || true)"
+  tip_tree="$(git rev-parse "${BRANCH}^{tree}" 2>/dev/null || true)"
+  base_full="$(git rev-parse "${base}^{commit}" 2>/dev/null || true)"
+  parents="$(git rev-list --parents -n1 "$BRANCH" 2>/dev/null || true)"
+  if [ -n "$tip" ] && [ "$tip_tree" = "$snap_tree" ] && [ "$parents" = "$tip $base_full" ]; then
+    dl_log "review branch already up to date: ${BRANCH}"
+    printf '%s\n' "$BRANCH"
+    exit "$DL_OK"
+  fi
+  dl_die "$DL_MERGE" "local branch '${BRANCH}' already exists; pass an explicit <branch> name"
+fi
+[ "$BRANCH" != "$current" ] || dl_die "$DL_MERGE" "refusing to overwrite the current branch '${BRANCH}'; choose another"
 
 if git cat-file -e "${base}^{commit}" 2>/dev/null; then
   # No real change vs base → nothing to review.

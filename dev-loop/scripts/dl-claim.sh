@@ -59,13 +59,10 @@ dl_lock() {
     || dl_die "$DL_PRECOND" "could not acquire lock '$name' within ${timeout}s (another claim in progress)"
 }
 
-# owner_base <assignee> — strip any legacy "#nonce" suffix for comparison.
-owner_base() { printf '%s' "${1%%#*}"; }
-
 # claim_one <uuid> — attempt to claim. Echoes uuid on success.
 # Returns: 0 claimed, 10 owned-by-another / lost, 20 absent or not pending.
 claim_one() {
-  local uuid="$1" status assignee start owner age now epoch
+  local uuid="$1" status assignee start owner age now epoch stolen_from="" stolen_age="" claim_value readback
   dl_task_exists "$uuid" || { dl_err "no such task: $uuid"; return "$DL_PRECOND"; }
 
   status="$(dl_task_field "$uuid" '.status // ""')"
@@ -94,7 +91,8 @@ claim_one() {
         age=$(( now - epoch ))
         if [ "$age" -ge "$STEAL_SECS" ]; then
           dl_warn "stealing stale claim on $uuid (owner=$owner, active ${age}s ≥ ${STEAL_SECS}s)"
-          dl_anno_event "$uuid" "stolen from $owner after ${age}s idle"
+          stolen_from="$owner"
+          stolen_age="$age"
         else
           dl_err "task $uuid owned by '$owner' (active only ${age}s < ${STEAL_SECS}s) — not stale"
           return "$DL_LOST"
@@ -109,17 +107,21 @@ claim_one() {
     fi
   fi
 
-  # Compare-and-swap: write our owner, read it back, confirm it is still ours.
-  dl_do dl_task "$uuid" modify assignee:"$DEV_LOOP_OWNER"
+  # Compare-and-swap: write our owner plus a nonce, read it back, confirm the
+  # exact value. Display/ownership checks elsewhere strip "#..." via owner_base.
+  claim_value="${DEV_LOOP_OWNER}#$$-${RANDOM}${RANDOM}"
+  dl_do dl_task "$uuid" modify assignee:"$claim_value"
   if [ -z "$DL_DRY_RUN" ]; then
-    local readback
-    readback="$(owner_base "$(dl_task_field "$uuid" '.assignee // ""')")"
-    if [ "$readback" != "$DEV_LOOP_OWNER" ]; then
-      dl_err "lost race for $uuid (now owned by '$readback')"
+    readback="$(dl_task_field "$uuid" '.assignee // ""')"
+    if [ "$readback" != "$claim_value" ]; then
+      dl_err "lost race for $uuid (now owned by '$(owner_base "$readback")')"
       return "$DL_LOST"
     fi
   fi
   dl_do dl_task "$uuid" start
+  if [ -n "$stolen_from" ]; then
+    dl_anno_event "$uuid" "stolen from $stolen_from after ${stolen_age}s idle"
+  fi
   dl_anno_event "$uuid" "claimed"
   dl_log "claimed: $uuid"
   printf '%s\n' "$uuid"
@@ -130,7 +132,7 @@ claim_one() {
 sleep "0.$(printf '%03d' $((RANDOM % 250)))" 2>/dev/null || true
 
 if [ -n "$UUID" ]; then
-  dl_lock "task-$UUID"
+  dl_lock "select"
   rc=0; claim_one "$UUID" || rc=$?
   exit "$rc"
 fi
@@ -156,12 +158,15 @@ done
 # Optional: reclaim a stale active task if stealing is permitted.
 if [ -n "$STEAL_SECS" ]; then
   mapfile -t actives < <(
-    dl_task_export +ACTIVE status:pending | jq -r '.[].uuid' 2>/dev/null
+    dl_task_export +ACTIVE status:pending \
+      | jq -r 'sort_by(.urgency // 0) | reverse | .[].uuid' 2>/dev/null
   )
   for c in "${actives[@]:-}"; do
     [ -n "$c" ] || continue
     rc=0; claim_one "$c" || rc=$?
     [ "$rc" -eq "$DL_OK" ] && exit "$DL_OK"
+    [ "$rc" -eq "$DL_LOST" ] && continue
+    exit "$rc"
   done
 fi
 

@@ -22,7 +22,8 @@ Usage: dl-done.sh <uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run] [-
 
   --keep-box       leave the crabbox lease running (default: stop it)
   --keep-worktree  leave the per-task worktree + scratch branch in place
-  --force          complete even if the claim is owned by another owner
+  --force          complete even if the claim is owned by another owner, and
+                   bypass the unmerged-worktree guard
   --dry-run        log mutations instead of performing them
 
 Exit: 0 ok, 10 owned by another (use --force), 20 precondition.
@@ -70,6 +71,7 @@ if [ "$KEEP_BOX" -ne 1 ]; then
 fi
 
 branch="$(dl_anno_get "$UUID" branch)"
+base="$(dl_anno_get "$UUID" base)"
 
 # Remove the per-task worktree and its scratch branch (best-effort). The
 # review/<slug> branch is shared in the repo and is KEPT — only the throwaway
@@ -77,6 +79,38 @@ branch="$(dl_anno_get "$UUID" branch)"
 # `git worktree list` clean. Must run from inside the repo (not the worktree).
 if [ "$KEEP_WT" -ne 1 ]; then
   wt="$(dl_anno_get "$UUID" worktree)"
+  if [ -n "$wt" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -d "$wt" ] && [ "$FORCE" -ne 1 ] && [ -z "$branch" ] && dl_worktree_dirty_vs_base "$wt" "$base"; then
+      dl_die "$DL_PRECOND" "worktree has unmerged changes and no review branch; run dl-merge-back.sh <uuid> first, or pass --force / --keep-worktree"
+    fi
+    prefix="${DEV_LOOP_WORKTREE_DIR}/$(dl_repo_key)/"
+    case "$wt" in
+      "$prefix"*) ;;
+      *)
+        dl_warn "recorded worktree $wt is outside this repo's dev-loop worktree dir ($prefix); leaving it in place"
+        wt=""
+        ;;
+    esac
+  fi
+  if [ -n "$wt" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -d "$wt" ]; then
+      wt_phys="$(cd "$wt" 2>/dev/null && pwd -P || printf '%s' "$wt")"
+      cwd_phys="$(pwd -P)"
+      if [ "$cwd_phys" = "$wt_phys" ] || [[ "$cwd_phys" == "$wt_phys/"* ]]; then
+        main_checkout="$(git -C "$wt" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n1 || true)"
+        retry_cmd="$0 $UUID"
+        [ "$KEEP_BOX" -eq 1 ] && retry_cmd="$retry_cmd --keep-box"
+        [ "$FORCE" -eq 1 ] && retry_cmd="$retry_cmd --force"
+        dl_warn "current directory is inside the worktree being removed; leaving it in place"
+        if [ -n "$main_checkout" ] && [ "$main_checkout" != "$wt_phys" ]; then
+          dl_warn "run from the main checkout: cd '$main_checkout' && $retry_cmd"
+        else
+          dl_warn "run from the main checkout and retry: $retry_cmd"
+        fi
+        wt=""
+      fi
+    fi
+  fi
   if [ -n "$wt" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     desc="$(dl_task_field "$UUID" '.description // ""')"
     wbranch="dl/$(dl_slug "$UUID" "$desc")"

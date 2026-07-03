@@ -108,6 +108,23 @@ dl_task_exists() {
   [ "${n:-0}" = "1" ]
 }
 
+# owner_base <assignee> — strip any "#nonce" suffix for display and ownership
+# comparisons. The full assignee value is still used for claim CAS.
+owner_base() { printf '%s' "${1%%#*}"; }
+
+# dl_require_owner <uuid> — fail unless the current owner owns the task.
+dl_require_owner() {
+  local uuid="$1" assignee owner
+  assignee="$(dl_task_field "$uuid" '.assignee // ""')"
+  owner="$(owner_base "$assignee")"
+  if [ -z "$owner" ]; then
+    dl_die "$DL_LOST" "task $uuid is unclaimed; claim it first with dl-claim.sh"
+  fi
+  if [ "$owner" != "$DEV_LOOP_OWNER" ]; then
+    dl_die "$DL_LOST" "task $uuid is owned by '$owner', not you ($DEV_LOOP_OWNER)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Structured annotations as recoverable machine state (box=, base=, branch=).
 # Annotations are append-only (an audit trail); reads take the LAST match.
@@ -143,6 +160,7 @@ dl_anno_event() {
 # dl_dur_to_secs <dur> — parse 90s / 30m / 2h / 1d / 2h30m → seconds on stdout.
 dl_dur_to_secs() {
   local s="$1" total=0 num unit rest="$1"
+  [ -n "$s" ] || dl_die "$DL_PRECOND" "unparseable duration: '' (use forms like 90s, 30m, 2h, 1d, 2h30m)"
   if [[ "$s" =~ ^[0-9]+$ ]]; then printf '%s' "$s"; return 0; fi
   while [[ "$rest" =~ ^([0-9]+)([smhd])(.*)$ ]]; do
     num="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
@@ -227,6 +245,40 @@ dl_repo_key() {
 # dl_worktree_dir_for <slug> — absolute path of the per-task worktree for <slug>.
 dl_worktree_dir_for() {
   printf '%s/%s/%s' "$DEV_LOOP_WORKTREE_DIR" "$(dl_repo_key)" "$1"
+}
+
+# dl_worktree_snapshot_tree <worktree> — write a tree from the worktree's whole
+# source state using a throwaway index. Prints the tree sha.
+dl_worktree_snapshot_tree() {
+  local wt="$1" tmp_index snap_tree
+  [ -d "$wt" ] || dl_die "$DL_PRECOND" "recorded worktree is missing: $wt"
+  tmp_index="$(mktemp "${TMPDIR:-/tmp}/dl-index.XXXXXX")" \
+    || dl_die "$DL_PRECOND" "could not allocate temporary git index"
+  rm -f "$tmp_index"
+  if ! GIT_INDEX_FILE="$tmp_index" git -C "$wt" add -A; then
+    rm -f "$tmp_index"
+    dl_die "$DL_PRECOND" "failed to stage worktree snapshot: $wt"
+  fi
+  snap_tree="$(GIT_INDEX_FILE="$tmp_index" git -C "$wt" write-tree)" || {
+    rm -f "$tmp_index"
+    dl_die "$DL_PRECOND" "failed to write worktree snapshot tree: $wt"
+  }
+  rm -f "$tmp_index"
+  [ -n "$snap_tree" ] || dl_die "$DL_PRECOND" "snapshot produced no tree"
+  printf '%s\n' "$snap_tree"
+}
+
+# dl_worktree_dirty_vs_base <worktree> <base> — return 0 when the worktree's
+# current source tree differs from base, 1 when identical. Missing base is
+# treated as dirty so cleanup never discards work it cannot compare.
+dl_worktree_dirty_vs_base() {
+  local wt="$1" base="$2" snap_tree
+  [ -n "$base" ] || return 0
+  if ! git -C "$wt" cat-file -e "${base}^{tree}" 2>/dev/null; then
+    return 0
+  fi
+  snap_tree="$(dl_worktree_snapshot_tree "$wt")"
+  ! git -C "$wt" diff --quiet "${base}^{tree}" "$snap_tree" 2>/dev/null
 }
 
 # Resolve the directory this library lives in (for sibling-script lookups).

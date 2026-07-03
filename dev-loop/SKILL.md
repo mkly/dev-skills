@@ -21,7 +21,8 @@ git worktree is snapshotted into a new local branch for review.
 
 - **One owner per task.** Never work a task you have not claimed via
   `dl-claim.sh`. If a claim returns exit `10`, the task is someone else's — pick
-  another. This is the skill's hard guarantee.
+  another. This is the skill's hard guarantee, and `dl-box.sh`, `dl-run.sh`, and
+  `dl-merge-back.sh` enforce it unless you pass `--force`.
 - **Never push to a remote.** Merge-back creates a *local* branch only.
 - **Never auto-merge** the review branch into `main`/current — that is a
   deliberate, separate human/agent decision after review.
@@ -50,7 +51,9 @@ target repo. In command examples, `/path/to/dev-loop-skill` means the installed
 skill directory containing this `SKILL.md`; invoke scripts from there while
 keeping the target repo checkout as the current working directory. Do not assume
 the target repo contains `scripts/dl-*.sh`. The scripts are idempotent and
-re-runnable; pass `--dry-run` to any mutating script to preview. Full recipes,
+re-runnable where that is safe; merge-back exact re-runs of the same branch are
+no-ops, while branch-name collisions still return exit `30`. Pass `--dry-run` to
+any mutating script to preview. Full recipes,
 the env-var table, the exit-code table, and troubleshooting are in
 **reference.md** — read it when a step fails or when you need exact flags.
 
@@ -60,10 +63,10 @@ the env-var table, the exit-code table, and troubleshooting are in
 /path/to/dev-loop-skill/scripts/dl-setup.sh
 ```
 
-Ensures the `assignee` UDA exists (timestamped `~/.taskrc` backup first), checks
-for `git jq flock task crabbox` (+ `incus` when that provider is active), and
-gates on `crabbox doctor`. Exit `20` means a precondition failed — read the
-message and fix it before continuing.
+Ensures the `assignee` UDA exists (timestamped backup of the active taskrc when
+one exists), checks for `git jq flock task crabbox` (+ `incus` when that provider
+is active), and gates on `crabbox doctor`. Exit `20` means a precondition failed
+— read the message and fix it before continuing.
 
 **Owner id.** Setup reports the effective `DEV_LOOP_OWNER`. The default
 (`$USER@$host`) is *not* distinct between two agents running as the same Unix
@@ -102,8 +105,9 @@ task <downstream> annotate "input: review/<producer-slug>"      # WHICH branch t
 the `input:` annotation names the concrete branch to start from (its slug is
 `dl-<producer-short>-<desc>`; the producer records the exact name as `branch=`
 once it merges back, and `dl-status.sh`'s "Review branches" section reverse-maps
-it). When you claim the downstream task, read its `input:` annotation and base
-the work on that branch instead of plain `main`.
+it). `dl-box.sh` reads the latest `input:` annotation automatically on the first
+warm and records the resolved commit as `base=`; use `dl-box.sh --base <ref>` only
+when you intentionally need to override that input.
 
 ## Phase 2 — Claim (the lock)
 
@@ -134,11 +138,13 @@ Always capture the uuid from stdout and use it for every subsequent phase.
 ```
 
 - `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
-  scratch branch `dl/<slug>` rooted at the current HEAD, placed outside the repo
-  under `$DEV_LOOP_WORKTREE_DIR/<repo>/<slug>` and recorded as `worktree=<path>`;
+  scratch branch `dl/<slug>` rooted at `--base <ref>`, else the task's latest
+  `input:` branch, else current HEAD, placed outside the repo under
+  `$DEV_LOOP_WORKTREE_DIR/<repo>/<slug>` and recorded as `worktree=<path>`;
   and (2) exactly one Incus lease (reuses the live one if the `box=` annotation
-  still resolves). It records `box=<handle>`, `base=<HEAD sha>` (the merge-back
-  diff base), and `worktree=<path>`, and prints the handle. The worktree gives
+  still resolves). It records `box=<handle>`, `base=<resolved sha>` (the
+  merge-back diff base), and `worktree=<path>`, and prints the handle. The
+  worktree gives
   each task its own isolated working tree + branch, so many agents can work the
   same repo on one machine without stepping on each other.
 - **Edit in the task's worktree** (`worktree=<path>`) with your normal tools (your
@@ -198,6 +204,9 @@ for later review via `task <uuid> info`.
 (Incus delete-on-release frees the instance) unless `--keep-box`, and the task's
 worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
 `review/<slug>` branch is shared in the repo and is always KEPT for review.
+If the worktree differs from `base=` and no `branch=` was recorded, `dl-done.sh`
+exits `20` and leaves the worktree in place; run `dl-merge-back.sh "$uuid"` first
+or pass `--force` / `--keep-worktree` intentionally.
 
 - **Abandon instead of complete:** `/path/to/dev-loop-skill/scripts/dl-release.sh "$uuid" [--stop-box]`
   stops the task and clears `assignee` so another owner can claim it; the task
