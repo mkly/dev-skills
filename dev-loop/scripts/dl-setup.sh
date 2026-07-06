@@ -90,11 +90,22 @@ else
 fi
 
 # 4. Owner report.
+owner_file="${XDG_CONFIG_HOME:-$HOME/.config}/dev-loop/owner"
+if [ ! -f "$owner_file" ]; then
+  random_suffix="$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  new_owner="$(dl_default_owner)/agent-${random_suffix}"
+  dl_do mkdir -p "$(dirname "$owner_file")"
+  dl_do sh -c "echo '$new_owner' > '$owner_file'"
+  if [ -z "${orig_owner:-}" ]; then
+    DEV_LOOP_OWNER="$new_owner"
+  fi
+fi
+
 dl_log "effective owner: $DEV_LOOP_OWNER"
-if [ -z "$orig_owner" ]; then
-  dl_warn "DEV_LOOP_OWNER is unset; using default '$DEV_LOOP_OWNER'."
-  dl_warn "For multi-agent attribution, export a distinct id, e.g.:"
-  dl_warn "  export DEV_LOOP_OWNER='${DEV_LOOP_OWNER}/$(date +%s)'"
+if [ -n "${orig_owner:-}" ]; then
+  dl_log "DEV_LOOP_OWNER explicitly set in environment"
+else
+  dl_log "DEV_LOOP_OWNER resolved from state file ($owner_file)"
 fi
 
 dl_log "setup complete"
