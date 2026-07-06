@@ -63,11 +63,14 @@ Enumerate the available local review branches. Candidate set =
 `refs/heads/review/*` ∪ every `branch=` annotation value that still resolves to
 a local branch; each is reverse-mapped to its producing task (any status).
 Emits a JSON array on stdout, sorted by branch name:
-`{branch, merged, ahead, base, task}` where `task` is
-`{uuid, short, description, project, status, end, base, commits, summary,
+`{branch, merged, ahead, superseded, superseded_by, base, task}` where `task`
+is `{uuid, short, description, project, status, end, base, commits, summary,
 acceptance}` or `null` (ORPHAN — no task records the branch).
 - `merged` = branch tip is an ancestor of HEAD (landed; just clean up).
 - `ahead` = `git rev-list --count HEAD..branch`.
+- `superseded` = another (non-deleted) task records this branch as its latest
+  `input:` — a fix builds on top of it. Don't merge or re-review it on its own;
+  `superseded_by` is that task's short uuid (`""` otherwise).
 - `base` = the task's `base=` if it still resolves, else
   `git merge-base HEAD branch`, else `""`.
 - With a slug → only branches whose producing task is in `project:<slug>`
@@ -106,8 +109,8 @@ in `$DLR_JQ_DEFS` (`kv($k)` last-wins / `notes($p)` collect-all), and
 ```sh
 slug=my-goal
 branches="$(scripts/dlr-collect.sh "$slug")"
-printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
-for b in $(printf '%s' "$branches" | jq -r '.[] | select(.merged | not) | .branch'); do
+printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" elif .superseded then "SUPERSEDED by \(.superseded_by)" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
+for b in $(printf '%s' "$branches" | jq -r '.[] | select((.merged or .superseded) | not) | .branch'); do
   scripts/dlr-diff.sh "$b"        # review each; verdict: clean | needs-fixes
 done
 # clean → scripts/dlr-merge.sh "$b"

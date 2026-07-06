@@ -62,25 +62,30 @@ scripts/dlr-collect.sh <goal-slug>    # only branches produced by that project
 ```
 
 Emits a JSON array on stdout, one object per **existing local branch**:
-`{branch, merged, ahead, base, task}` where `task` is the producing task's
+`{branch, merged, ahead, superseded, superseded_by, base, task}` where `task`
+is the producing task's
 context (`{uuid, short, description, project, status, end, base, commits,
 summary, acceptance}`) or `null` when no task records the branch (ORPHAN).
 Capture it once and triage:
 
 ```sh
 branches="$(scripts/dlr-collect.sh)"
-printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
+printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" elif .superseded then "SUPERSEDED by \(.superseded_by)" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
 ```
 
 - Empty match (`[]`, exit `0`) → report "no review branches to review" and stop.
 - `merged: true` → already landed in the current branch; skip review and just
   clean it up with `dlr-merge.sh` (it detects this and only deletes).
+- `superseded: true` → another task (short uuid in `superseded_by`) records this
+  branch as its `input:` — a fix is stacked (or being stacked) on top. Do not
+  review or merge it on its own; it lands, and becomes `merged: true`, when its
+  successor's branch merges.
 - `task: null` (ORPHAN) → review it anyway against generic quality; if it needs
   fix tasks, ask the user which project to file them under.
 
 ## Phase 2 — Review each unmerged branch
 
-For every object with `merged: false`, in order:
+For every object with `merged: false` and `superseded: false`, in order:
 
 1. **State the intent.** Read `task.description`, `task.acceptance`, and
    `task.summary` from the collected object — this is the bar the diff is
@@ -123,7 +128,7 @@ task "$fix" annotate "review-of: <task.short> $branch"     # link back to the re
   top of the reviewed work.
 - Use `depends:` between fix tasks when one must land before another.
 - **Leave the branch alone** — do not merge or delete it; the fix task owns it
-  now.
+  now (the next `dlr-collect.sh` run will show it as `superseded`).
 
 ### clean → merge and clean up
 

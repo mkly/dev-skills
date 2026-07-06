@@ -10,9 +10,12 @@
 # is reverse-mapped to its producing task (any status — the producer is usually
 # completed). Read-only. Emits a JSON array on stdout, one object per branch:
 #
-#   { branch, merged, ahead, base, task }
+#   { branch, merged, ahead, superseded, superseded_by, base, task }
 #     - merged: branch tip is an ancestor of HEAD (landed; just clean up)
 #     - ahead:  commit count HEAD..branch
+#     - superseded: another (non-deleted) task records this branch as its
+#       input: — a fix is stacked on top; don't merge or review it on its own
+#     - superseded_by: that task's short uuid ("" when not superseded)
 #     - base:   task's base= annotation if it still resolves, else
 #               merge-base HEAD..branch, else "" (the diff base)
 #     - task:   {uuid, short, description, project, status, end, base, commits,
@@ -63,10 +66,21 @@ by_branch="$(printf '%s' "$raw" | jq "$DLR_JQ_DEFS"'
         summary: notes("summary"), acceptance: notes("acceptance") } ]
   | INDEX(.branch)')"
 
+# input-branch -> consuming task: a branch named by another task's latest
+# "input:" annotation is superseded (its fix/successor builds on top of it).
+by_input="$(printf '%s' "$raw" | jq '
+  [ .[] | select(.status != "deleted")
+    | { b: ((.annotations // []) | map(.description)
+            | map(select(startswith("input:"))) | last // ""
+            | sub("^input:\\s*"; "")),
+        short: .uuid[0:8] }
+    | select(.b != "") ]
+  | INDEX(.b)')"
+
 declare -A SEEN
 entries=()
 add_branch() {
-  local b="$1" merged=false ahead task base
+  local b="$1" merged=false ahead task base sup
   [ -n "$b" ] || return 0
   [ -n "${SEEN[$b]:-}" ] && return 0
   SEEN["$b"]=1
@@ -79,9 +93,13 @@ add_branch() {
   if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
     base="$(git merge-base HEAD "$b" 2>/dev/null || echo '')"
   fi
+  sup="$(printf '%s' "$by_input" | jq --arg b "$b" '.[$b] // null')"
   entries+=("$(jq -n --arg branch "$b" --argjson merged "$merged" \
       --argjson ahead "$ahead" --arg base "$base" --argjson task "$task" \
-      '{branch: $branch, merged: $merged, ahead: $ahead, base: $base, task: $task}')")
+      --argjson sup "$sup" \
+      '{branch: $branch, merged: $merged, ahead: $ahead,
+        superseded: ($sup != null), superseded_by: ($sup.short // ""),
+        base: $base, task: $task}')")
 }
 
 while IFS= read -r b; do add_branch "$b"; done \
@@ -101,5 +119,6 @@ fi
 n="$(printf '%s' "$out" | jq 'length')"
 unmerged="$(printf '%s' "$out" | jq '[.[] | select(.merged | not)] | length')"
 orphans="$(printf '%s' "$out" | jq '[.[] | select(.task == null)] | length')"
-dlr_log "found ${n} review branch(es): ${unmerged} unmerged, ${orphans} orphan"
+superseded="$(printf '%s' "$out" | jq '[.[] | select(.superseded)] | length')"
+dlr_log "found ${n} review branch(es): ${unmerged} unmerged, ${orphans} orphan, ${superseded} superseded"
 printf '%s\n' "$out"
