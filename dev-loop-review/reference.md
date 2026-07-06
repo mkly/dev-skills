@@ -1,142 +1,169 @@
 # dev-loop-review — reference
 
-Deep reference for the `dev-loop-review` skill: exit codes, environment knobs,
-each script's contract, recipes, and troubleshooting. The day-to-day workflow is
-in **SKILL.md**; read this when a step fails or you need exact flags.
+Deep reference for the `dev-loop-review` skill: exit codes, each script's
+contract, recipes, and troubleshooting. The day-to-day workflow is in
+**SKILL.md**; read this when a step fails or you need exact flags.
 
-This skill is **read-only**. It inspects completed dev-loop tasks and their local
-review branches and writes exactly one thing: the markdown review report under
-`$DLR_REPORT_DIR`. It never touches Taskwarrior state, branches, or your repo.
+This skill turns dev-loop's output branches into **actions**: it enumerates the
+available local `review/*` branches, reviews each diff against its producing
+task's intent, and then either files fix tasks (findings) or merges the branch
+into the current branch and deletes it (clean). It never pushes to a remote and
+never writes a report file.
 
 ## How it relates to dev-loop
 
-dev-loop, when it finishes a task, leaves a durable trail on the **completed**
-Taskwarrior task via annotations:
+dev-loop, when it finishes a task, leaves one local review branch and a durable
+trail on the producing Taskwarrior task via annotations:
 
-| annotation        | style       | written by        | meaning                                   |
-|-------------------|-------------|-------------------|-------------------------------------------|
-| `base=<sha>`      | `key=value` | `dl-box.sh`       | HEAD when the box was warmed = diff base  |
-| `branch=<name>`   | `key=value` | `dl-merge-back.sh`| the local review branch created           |
-| `commits=<r> (n=N)` | `key=value` | `dl-merge-back.sh`| `<base12>..<head12>` range + commit count |
-| `summary: …`      | `prefix:`   | agent (Phase 5)   | human note: what changed and why          |
-| `acceptance: …`   | `prefix:`   | agent (Phase 1)   | how the task is judged done               |
+| annotation          | style       | written by         | meaning                                    |
+|---------------------|-------------|--------------------|--------------------------------------------|
+| `base=<sha>`        | `key=value` | `dl-box.sh`        | worktree root = the review diff base       |
+| `branch=<name>`     | `key=value` | `dl-merge-back.sh` | the local review branch created            |
+| `commits=<r> (n=N)` | `key=value` | `dl-merge-back.sh` | `<base12>..<head12>` range + commit count  |
+| `summary: …`        | `prefix:`   | agent (Phase 5)    | human note: what changed and why           |
+| `acceptance: …`     | `prefix:`   | agent (Phase 1)    | how the task is judged done                |
 
-`key=value` annotations are read **last-wins** (the latest value of a key);
-`prefix:` notes are **all collected**. This skill only *reads* these — it relies
-on dev-loop having written them. Tasks without `branch=`/`commits=` are treated as
-non–dev-loop (filtered out when scanning by time window with no slug).
+`key=value` annotations are read **last-wins**; `prefix:` notes are **all
+collected**. This skill reads that trail to find each branch's producing task —
+but the work queue itself is **git**: only branches that actually exist locally
+are reviewed. A `branch=` annotation whose branch is gone (already merged and
+deleted) is simply not in the queue.
+
+This skill in turn writes annotations dev-loop consumes:
+
+| annotation                    | written by            | consumed by                                  |
+|-------------------------------|-----------------------|----------------------------------------------|
+| `acceptance: …` (on fix task) | agent (Phase 3)       | the next dev-loop run / this skill next time |
+| `input: <branch>` (on fix task) | agent (Phase 3)     | `dl-box.sh` — roots the fix worktree at the reviewed branch |
+| `review-of: <short> <branch>` (on fix task) | agent (Phase 3) | humans tracing a fix back to its review |
+| `dev-loop-review: merged …` (on producer) | `dlr-merge.sh` | audit trail of what landed where          |
 
 ## Exit codes
 
 The stable contract the agent branches on:
 
-| code | name        | meaning                                                            |
-|------|-------------|--------------------------------------------------------------------|
-| `0`  | ok          | success; a query that legitimately matches nothing is also `0`     |
-| `20` | precondition| missing tool, not in a git repo, bad usage/args, or no such task   |
-| `30` | missing-artifact | a task's review branch or base is not present in this checkout|
+| code | name         | meaning                                                              |
+|------|--------------|----------------------------------------------------------------------|
+| `0`  | ok           | success; a query that legitimately matches nothing is also `0`       |
+| `20` | precondition | missing tool, not in a git repo, dirty worktree, detached HEAD, bad usage |
+| `30` | missing/conflict | branch or diff base not present locally, or the merge conflicted |
 
-`30` is expected and recoverable: review branches are local and may have been
-merged-and-deleted, or the base may have been pruned/rebased away. Fall back to
-the `commits=` SHAs (`git show <sha>`) or note the task as not reviewable here.
-
-## Environment knobs
-
-| var              | default     | effect                                                       |
-|------------------|-------------|--------------------------------------------------------------|
-| `DLR_SINCE`      | `7d`        | default time window for `--since` and for a bare collect call|
-| `DLR_REPORT_DIR` | `.dev-loop` | directory the saved markdown report is written to (gitignored)|
-
-Durations are passed straight to Taskwarrior as `end.after:now-<dur>`, so any
-Taskwarrior duration works: `90m`, `2h`, `24h`, `7d`, `1w`, `1mo`.
+`30` from `dlr-merge.sh` on a conflict is recoverable and expected: the merge
+is aborted, the branch is kept, and the right response is a fix task
+(`input: <branch>`) asking for a rebase/conflict resolution.
 
 ## Scripts at a glance
 
-All in `scripts/`, sourced from `dlr-common.sh`, read-only, re-runnable. Each
-prints diagnostics to **stderr** and its machine-parseable payload to **stdout**.
+All in `scripts/`, sourced from `dlr-common.sh`, re-runnable. Each prints
+diagnostics to **stderr** and its machine-parseable payload to **stdout**.
+`dlr-collect.sh` and `dlr-diff.sh` are read-only; only `dlr-merge.sh` mutates.
 
-### `dlr-collect.sh [<project-slug>] [--since <dur>]`
-Enumerate completed dev-loop tasks and their review artifacts. Emits a JSON array
-on stdout, one object per task, sorted by completion time:
-`{uuid, short, description, project, end, base, branch, commits, summary,
-acceptance, reviewable}`.
-- With a slug → every completed task in `project:<slug>`.
-- `--since <dur>` adds an `end.after:now-<dur>` window (combinable with a slug).
-- No slug → defaults to `--since $DLR_SINCE` **and** filters to tasks that carry
-  dev-loop annotations (`branch=`/`commits=`), so unrelated tasks are excluded.
-- `reviewable` = a `branch=` was recorded (there is a diff to walk).
-- Empty match → exit `0`, body `[]`. Match counts go to stderr.
+### `dlr-collect.sh [<project-slug>]`
+Enumerate the available local review branches. Candidate set =
+`refs/heads/review/*` ∪ every `branch=` annotation value that still resolves to
+a local branch; each is reverse-mapped to its producing task (any status).
+Emits a JSON array on stdout, sorted by branch name:
+`{branch, merged, ahead, base, task}` where `task` is
+`{uuid, short, description, project, status, end, base, commits, summary,
+acceptance}` or `null` (ORPHAN — no task records the branch).
+- `merged` = branch tip is an ancestor of HEAD (landed; just clean up).
+- `ahead` = `git rev-list --count HEAD..branch`.
+- `base` = the task's `base=` if it still resolves, else
+  `git merge-base HEAD branch`, else `""`.
+- With a slug → only branches whose producing task is in `project:<slug>`
+  (orphans are excluded, since their project is unknown).
+- No branches → exit `0`, body `[]`. Counts go to stderr.
 
-### `dlr-diff.sh <uuid> [--stat-only] [-- <git diff flags>]`
-Resolve one task's `base=`/`branch=` and print, to stdout: the commit log
-(`git log --oneline base..branch`), the diffstat, and the full patch. Read-only
-(`git log`/`git diff` only; never checks out).
+### `dlr-diff.sh <branch> [--stat-only] [-- <git diff flags>]`
+Print one branch's review diff: a producing-task header, the commit log
+(`git log --oneline base..branch`), the diffstat, and the full patch. The base
+resolves like `dlr-collect.sh`'s. Read-only (never checks out).
 - `--stat-only` skips the full patch (triage a large change first).
 - `-- <flags>` forwards extra flags to `git diff` (e.g. `-w`, `-M`).
-- Exit `30` if the task has no `branch=`, the branch is absent locally, no
-  `base=`, or the base commit is missing locally — message says which.
+- Exit `30` if the branch is absent locally or no diff base can be determined.
+
+### `dlr-merge.sh <branch> [--dry-run]`
+Merge a **clean** review branch into the current branch, delete it
+(`git branch -d` — safe delete only), and annotate the producing task
+(`dev-loop-review: merged … ; branch deleted`, best-effort). Local only; the
+merge commit keeps git's default message (no attribution trailers). Prints the
+resulting HEAD sha on stdout.
+- Already-merged branch → skips the merge, just deletes (use it for cleanup).
+- Dirty worktree, detached HEAD, or `<branch>` checked out → exit `20`,
+  nothing changed.
+- Merge conflict → `git merge --abort`, branch kept, exit `30`.
+- `--dry-run` reports the plan and changes nothing.
 
 ### `dlr-common.sh` (sourced, not run)
 Shared library: exit-code constants, `dlr_log`/`dlr_warn`/`dlr_err`/`dlr_die`,
-`dlr_require`, `dlr_in_git_repo`, `dlr_task_export`, and the annotation readers
-`dlr_anno_kv <key>` / `dlr_anno_notes <prefix>` (both read a task's exported JSON
-on stdin).
+`dlr_require`, `dlr_in_git_repo`, `dlr_task_export`, the jq annotation helpers
+in `$DLR_JQ_DEFS` (`kv($k)` last-wins / `notes($p)` collect-all), and
+`dlr_task_for_branch <branch>` (JSON of the producing task, or `null`).
 
 ## Recipes
 
-**Review a whole goal, save the report:**
+**Review a whole goal end-to-end:**
 ```sh
 slug=my-goal
-tasks="$(scripts/dlr-collect.sh "$slug")"
-printf '%s' "$tasks" | jq -r '.[] | "\(.short)  \(.description)"'
-for u in $(printf '%s' "$tasks" | jq -r '.[] | select(.reviewable) | .uuid'); do
-  scripts/dlr-diff.sh "$u"        # review each
+branches="$(scripts/dlr-collect.sh "$slug")"
+printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
+for b in $(printf '%s' "$branches" | jq -r '.[] | select(.merged | not) | .branch'); do
+  scripts/dlr-diff.sh "$b"        # review each; verdict: clean | needs-fixes
 done
-mkdir -p "${DLR_REPORT_DIR:-.dev-loop}"
-# …compose and write ${DLR_REPORT_DIR:-.dev-loop}/review-$slug.md
+# clean → scripts/dlr-merge.sh "$b"
+# needs-fixes → task add … (see SKILL.md Phase 3)
 ```
 
-**Just the recent work, no slug:**
+**File a fix task for a finding (dev-loop conventions):**
 ```sh
-scripts/dlr-collect.sh --since 24h | jq -r '.[] | "\(.end)  \(.short)  \(.description)"'
+task add project:"$slug" "fix: <one concrete finding>"
+fix="$(task +LATEST uuids)"
+task "$fix" annotate "acceptance: <how we know it's fixed>"
+task "$fix" annotate "input: $branch"
+task "$fix" annotate "review-of: <producer-short> $branch"
 ```
 
-**Triage a large task, then read the full patch:**
+**Clean up branches that already landed:**
 ```sh
-scripts/dlr-diff.sh "$uuid" --stat-only
-scripts/dlr-diff.sh "$uuid"
+scripts/dlr-collect.sh | jq -r '.[] | select(.merged) | .branch' \
+  | while read -r b; do scripts/dlr-merge.sh "$b"; done
 ```
 
-**Fall back to commit SHAs when the branch is gone (exit 30):**
+**Triage a large branch, then read the full patch:**
 ```sh
-range="$(scripts/dlr-collect.sh "$slug" | jq -r --arg u "$uuid" '.[] | select(.uuid==$u) | .commits')"
-# range looks like "abc123abc123..def456def456 (n=3)"; review the SHAs directly:
-git show "${range%% *}"     # or: git log -p ${range%% *}
+scripts/dlr-diff.sh "$branch" --stat-only
+scripts/dlr-diff.sh "$branch"
 ```
 
-**Inspect a completed task directly (anything not in the collected object):**
+**Inspect the producing task directly (anything not in the collected object):**
 ```sh
 task <uuid> info
-task status:completed project:<slug> export | jq .
 ```
 
 ## Troubleshooting
 
-- **`dlr-collect.sh` prints `[]`.** Nothing matched. Check the slug
-  (`task projects`), widen `--since`, or confirm the tasks are actually completed
-  (`task status:completed count`). Note plain `task status:completed` shows
-  nothing because the default report implies `status:pending`; use
-  `task all status:completed`, `task completed`, or `… export`.
-- **Task shows but `reviewable:false`.** No `branch=` annotation — dev-loop's
-  merge-back never produced a review branch for it (e.g. a test-only task, or
-  merge-back exited `30`/`20`). Review via `commits=` if present, else note it.
-- **`dlr-diff.sh` exits `30` "branch not present locally".** The review branch
-  was deleted after a merge, or this checkout never fetched it. Use the `commits=`
-  SHAs (recipe above) or review on the checkout that still has the branch.
-- **`dlr-diff.sh` exits `30` "base commit not present".** The base was pruned or
-  rebased away. The `commits=` annotation still records the original range;
-  resolve the SHAs if they exist, otherwise the diff can't be reconstructed here.
+- **`dlr-collect.sh` prints `[]`.** No local `review/*` branches exist and no
+  `branch=` annotation resolves to one — the loop's output has all been merged
+  and deleted, or dev-loop never ran merge-back here. Confirm with
+  `git branch --list 'review/*'` and dev-loop's `dl-status.sh` (its Review
+  branches section shows `GONE` entries for merged-and-deleted branches).
+- **A branch shows `task: null` (ORPHAN).** No task records it — the annotation
+  was lost or the branch was made by hand. Review it against generic quality;
+  ask the user for a project before filing fix tasks.
+- **`dlr-diff.sh` exits `30` "cannot determine a diff base".** The recorded
+  base is gone and the branch shares no history with HEAD (e.g. rebased away).
+  Review the branch's own commits directly (`git log -p <branch>`), or use the
+  producing task's `commits=` range if those SHAs still resolve.
+- **`dlr-merge.sh` exits `20` "worktree is dirty".** Commit or stash local
+  changes first — the script refuses to merge over uncommitted work.
+- **`dlr-merge.sh` exits `30` "merge … conflicts".** The merge was aborted and
+  the branch kept. File a fix task ("rebase `<branch>` onto `<current>` and
+  resolve conflicts") with `input: <branch>`, and move on.
+- **`git branch -d` refused (branch not fully merged).** Should not happen
+  right after a successful merge; if it does, something moved HEAD between the
+  merge and the delete — re-run `dlr-merge.sh` (already-merged branches are
+  delete-only).
 - **`exit 20` "not inside a git repository".** Run from inside the target repo
   checkout (the same place dev-loop ran).
-- **`exit 20` "missing required command(s)".** Install the named tool; this skill
-  needs `task`, `jq`, and `git`.
+- **`exit 20` "missing required command(s)".** Install the named tool; this
+  skill needs `task`, `jq`, and `git`.

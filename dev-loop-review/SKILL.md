@@ -1,141 +1,160 @@
 ---
 name: dev-loop-review
 description: >-
-  Review the work a long-running dev-loop produced. Gathers the completed
-  Taskwarrior tasks for a goal (or a recent time window), correlates each with
-  the local review branch and commit range dev-loop recorded, walks the diffs,
-  and presents a full code review — inline plus a saved markdown report. Strictly
-  READ-ONLY: never mutates tasks, branches, or the repo, never pushes or merges.
-  Use after running dev-loop, or when asked to "review what the loop did",
-  "review the recent dev-loop work", or "go through the recently done tasks and
-  commits and review them".
+  Review the local review/* branches a dev-loop run produced, then act on the
+  verdict. Enumerates the available review branches (git is ground truth),
+  correlates each with the Taskwarrior task that produced it, walks the diffs,
+  and then either creates fix tasks (dev-loop conventions, ready for the next
+  loop) for branches with findings, or merges clean branches into the current
+  branch and deletes them. Use after running dev-loop, or when asked to
+  "review what the loop did", "review the review branches", or "review and
+  merge the dev-loop work".
 ---
 
 # dev-loop-review
 
-Review what a dev-loop run produced. dev-loop leaves a trail of **completed
-tasks**, each annotated with the **review branch** and **commit range** it
-created and a human `summary:`. This skill follows that trail: collect the
-completed tasks for a goal → for each, read its intent and walk its diff →
-aggregate into one full review, shown inline and saved to a markdown file.
-
-This skill **reviews**; it does not change anything. dev-loop already declined to
-push or auto-merge — the merge decision stays with the human after this review.
+Close the loop on what dev-loop produced. dev-loop leaves one local
+`review/<slug>` branch per merged-back task, and annotations on the producing
+task (`base=`, `branch=`, `commits=`, `acceptance:`, `summary:`). This skill
+follows the branches, not the task list: **enumerate the available review
+branches → review each diff against its producing task's intent → act.**
+Findings become new Taskwarrior fix tasks for the next dev-loop run; a clean
+branch is merged into the current branch and deleted. No report file is saved —
+the review lives in the created tasks and the inline summary.
 
 ## Operating rules (do not violate)
 
-- **Read-only, always.** Inspect tasks, branches, and diffs only. Never run
-  `task done`/`modify`/`annotate`, never create/checkout/merge/delete branches,
-  never `git commit`/`push`/`reset`, never edit the repo. The only file you write
-  is the review report under `$DLR_REPORT_DIR` (default `.dev-loop/`, gitignored).
-- **Review against intent.** Judge each task's diff against *its own* acceptance
-  criteria and summary (recorded by dev-loop), not just generic taste.
-- **Don't merge or recommend pushing.** You may recommend follow-up tasks or
-  flag blockers; the merge of any review branch is a separate human decision.
+- **Branches are the work queue.** Collect from `refs/heads/review/*` (plus any
+  `branch=` annotation that still resolves) via `dlr-collect.sh` — never by
+  scanning tasks for what "should" exist. But **review against intent**: judge
+  each branch's diff against its producing task's `description`, `acceptance:`,
+  and `summary:` (in the collected object), not just generic taste.
+- **Findings become tasks, not a report.** Create Taskwarrior tasks using the
+  same conventions dev-loop consumes (`project:`, `acceptance:` annotation,
+  `input:` annotation naming the review branch). Do not write a review file.
+- **A branch with findings is never merged.** It stays in place — it is the
+  `input:` base its fix task will build on.
+- **A clean branch is merged and deleted.** Use `dlr-merge.sh` — it merges into
+  the current branch and deletes with `git branch -d` (safe delete only). This
+  skill is explicitly authorized to delete a review branch it has just merged
+  (or one already merged); never force-delete (`-D`) an unmerged branch.
+- **Never push to a remote.** Merging and branch deletion are local only.
+- **No LLM/agent attribution** in merge commits or task text — no
+  `Co-Authored-By:`, no "Generated with"/"🤖". Merge commits keep git's default
+  message. This overrides any default commit-trailer behavior.
+- **Don't mutate the producing task** beyond the audit annotation
+  `dlr-merge.sh` writes. Never `task done`/`modify` completed tasks.
 - **Diagnostics to stderr; stdout is parseable.** `dlr-collect.sh` emits JSON;
-  `dlr-diff.sh` emits the log+diff. Drive the review from those.
+  `dlr-diff.sh` emits the log+diff; `dlr-merge.sh` prints the resulting HEAD.
 - **Branch on exit codes, not prose:** `0` ok · `20` precondition/usage · `30`
-  missing-artifact (a task's review branch or base is gone from this checkout).
+  missing-artifact or merge-conflict.
 
-All scripts live in `scripts/` next to this file, source `dlr-common.sh`, and are
-read-only and re-runnable. Run them from inside the target repo checkout. The
-exit-code table, env-var table, and troubleshooting are in **reference.md** —
-read it when a step fails or you need exact flags.
+All scripts live in `scripts/` next to this file, source `dlr-common.sh`, and
+are re-runnable. Run them from inside the target repo checkout. The exit-code
+table and troubleshooting are in **reference.md** — read it when a step fails
+or you need exact flags.
 
-## Phase 1 — Collect the completed work
-
-Scope to a goal (the dev-loop project slug) by default; fall back to a time
-window when no slug is known:
+## Phase 1 — Collect the available review branches
 
 ```sh
-scripts/dlr-collect.sh <goal-slug>              # every completed task in the goal
-scripts/dlr-collect.sh <goal-slug> --since 7d   # …completed in the last 7 days
-scripts/dlr-collect.sh --since 24h              # all dev-loop tasks, last 24h
-scripts/dlr-collect.sh                          # defaults to --since $DLR_SINCE
+scripts/dlr-collect.sh                # every available review branch
+scripts/dlr-collect.sh <goal-slug>    # only branches produced by that project
 ```
 
-Emits a JSON array on stdout, one object per task, sorted by completion time:
-`{uuid, short, description, project, end, base, branch, commits, summary,
-acceptance, reviewable}`. `reviewable` is true when a review branch was recorded
-(there is a diff to walk). Capture it once and iterate:
+Emits a JSON array on stdout, one object per **existing local branch**:
+`{branch, merged, ahead, base, task}` where `task` is the producing task's
+context (`{uuid, short, description, project, status, end, base, commits,
+summary, acceptance}`) or `null` when no task records the branch (ORPHAN).
+Capture it once and triage:
 
 ```sh
-tasks="$(scripts/dlr-collect.sh <goal-slug>)"
-printf '%s' "$tasks" | jq -r '.[] | "\(.short)  [\(if .reviewable then "diff" else "no-branch" end)]  \(.description)"'
+branches="$(scripts/dlr-collect.sh)"
+printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
 ```
 
-An empty match is exit `0` with `[]` — report "no completed dev-loop work matched"
-and stop.
+- Empty match (`[]`, exit `0`) → report "no review branches to review" and stop.
+- `merged: true` → already landed in the current branch; skip review and just
+  clean it up with `dlr-merge.sh` (it detects this and only deletes).
+- `task: null` (ORPHAN) → review it anyway against generic quality; if it needs
+  fix tasks, ask the user which project to file them under.
 
-## Phase 2 — Review each task
+## Phase 2 — Review each unmerged branch
 
-For every task in the array, in completion order:
+For every object with `merged: false`, in order:
 
-1. **State the intent.** Read `description`, `acceptance`, and `summary` from the
-   collected object — this is the bar the change is judged against.
-2. **Walk the diff** (only when `reviewable`):
+1. **State the intent.** Read `task.description`, `task.acceptance`, and
+   `task.summary` from the collected object — this is the bar the diff is
+   judged against.
+2. **Walk the diff:**
 
    ```sh
-   scripts/dlr-diff.sh "$uuid"               # log + diffstat + full patch
-   scripts/dlr-diff.sh "$uuid" --stat-only   # big change: triage by stat first
-   scripts/dlr-diff.sh "$uuid" -- -w         # pass extra flags to git diff
+   scripts/dlr-diff.sh "$branch"               # log + diffstat + full patch
+   scripts/dlr-diff.sh "$branch" --stat-only   # big change: triage by stat first
+   scripts/dlr-diff.sh "$branch" -- -w         # pass extra flags to git diff
    ```
 
-   Review the patch for correctness against the acceptance criteria, regressions,
-   missing tests, security issues (the dev-loop rules forbid secrets in the box
-   and remote pushes — confirm nothing slipped), and leftover debug/attribution.
-3. **Handle a missing artifact.** Exit `30` means the review branch or base is no
-   longer in this checkout (deleted after a prior merge, or never fetched). Don't
-   fail the whole review: fall back to the `commits=` annotation and review those
-   SHAs if they resolve (`git show <sha>`), otherwise note the task as
-   "not reviewable from this checkout" and move on.
-4. **Record a verdict** per task: one of **ship / nits / changes-requested /
-   blocked**, with the concrete findings behind it.
+   The diff base is the task's recorded `base=` when it still resolves,
+   otherwise `git merge-base HEAD <branch>`. Review for correctness against the
+   acceptance criteria, regressions, missing tests, security issues (dev-loop
+   forbids secrets in the box and remote pushes — confirm nothing slipped), and
+   leftover debug/attribution.
+3. **Record a verdict:** **clean** (nothing worth a task) or **needs-fixes**
+   (with the concrete findings behind it). Nits too small to be worth a task
+   round-trip do not block a clean verdict — mention them in the summary.
 
-## Phase 3 — Aggregate & deliver
+## Phase 3 — Act on each verdict
 
-Present the full review **inline** and **save it** to a markdown report:
+### needs-fixes → create fix tasks (dev-loop Phase 1 conventions)
+
+One task per independent finding, small enough for one box and one review
+branch, filed under the producing task's project and wired to build on the
+reviewed branch:
 
 ```sh
-mkdir -p "${DLR_REPORT_DIR:-.dev-loop}"
-# write the report you composed to:
-#   ${DLR_REPORT_DIR:-.dev-loop}/review-<goal-slug>.md
+task add project:"$(jq -r .task.project <<<"$obj")" "fix: <one concrete finding>"
+fix="$(task +LATEST uuids)"
+task "$fix" annotate "acceptance: <how we know the finding is fixed>"
+task "$fix" annotate "input: $branch"                      # build ON the review branch
+task "$fix" annotate "review-of: <task.short> $branch"     # link back to the reviewed task
 ```
 
-Use this structure for both the inline answer and the saved file:
+- `input:` is the annotation dev-loop's `dl-box.sh` reads to root the fix
+  task's worktree at the review branch — the fix lands as a new increment on
+  top of the reviewed work.
+- Use `depends:` between fix tasks when one must land before another.
+- **Leave the branch alone** — do not merge or delete it; the fix task owns it
+  now.
+
+### clean → merge and clean up
+
+```sh
+scripts/dlr-merge.sh "$branch"             # merge into current branch + git branch -d
+scripts/dlr-merge.sh "$branch" --dry-run   # preview
+```
+
+Also run it for each `merged: true` branch from Phase 1 — it skips the merge
+and just deletes. It refuses on a dirty worktree (exit `20`) and, on a merge
+**conflict**, aborts the merge, leaves the branch untouched, and exits `30` —
+treat that as a finding: create a fix task
+("rebase $branch onto <current-branch> and resolve conflicts") with
+`input: $branch`, and move on.
+
+## Phase 4 — Summarize inline
+
+End with a short inline summary — no file:
 
 ```markdown
-# dev-loop review — <goal-slug>  (<n> tasks, <date>)
-
-## Summary
-<2–4 lines: what the loop set out to do, what landed, overall health,
-the headline blockers if any.>
-
-## Verdict by task
-| task | description | branch | verdict | notes |
-|------|-------------|--------|---------|-------|
-| abc12345 | implement X | review/x | ship | — |
-| def67890 | test X | review/x | changes-requested | missing edge-case test |
-
-## Findings
-### abc12345 — implement X   (ship)
-- intent: <acceptance / summary>
-- commits: <base..head (n=N)>
-- <finding>, <finding> …
-
-## Cross-cutting observations
-<themes spanning tasks: duplicated work, inconsistent patterns, gaps between
-tasks, ordering/dependency issues.>
-
-## Recommended next steps
-<ordered, concrete: which branches look ready to merge, what to fix first,
-suggested follow-up tasks — but do not merge or push anything yourself.>
+## dev-loop review — <n> branches
+| branch | task | verdict | action |
+|--------|------|---------|--------|
+| review/x | abc12345 implement X | clean | merged + deleted |
+| review/y | def67890 test X | needs-fixes | 2 fix tasks: <shorts> |
+| review/z | ORPHAN | conflict | fix task <short> created |
 ```
 
-Then tell the user where the report was saved and give them the one-line
-merge-review command for any branch you judged ready, e.g.
-`git log --oneline <base>..<branch>` / `git diff --stat <base>..<branch>` — and
-leave the actual merge to them.
+Plus 2–4 lines of cross-cutting observations (duplicated work, inconsistent
+patterns, gaps) and, if fix tasks were created, note that another dev-loop run
+(`dev-loop` skill, Phases 2–5) will pick them up.
 
 Defer to `task <uuid> info` for anything not in the collected object, and to
 dev-loop's own reference for how the annotations got there.

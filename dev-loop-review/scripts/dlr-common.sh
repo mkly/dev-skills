@@ -2,15 +2,18 @@
 # dlr-common.sh — shared helpers for the dev-loop-review skill scripts.
 # Sourced, never executed directly. Keep POSIX-ish bash; assume bash 4+.
 #
-# This skill is READ-ONLY with respect to your repo and task store: it inspects
-# completed dev-loop tasks and their local review branches and never mutates
-# them. Mirrors dev-loop's conventions so output stays machine-parseable.
+# This skill reviews the local review/* branches dev-loop produced and ACTS on
+# the verdict: fix tasks for findings, merge + branch delete for clean branches.
+# Collection and diffing are read-only; only dlr-merge.sh mutates the repo
+# (local merge + safe branch delete + one audit annotation — never a push).
+# Mirrors dev-loop's conventions so output stays machine-parseable.
 
 # ---------------------------------------------------------------------------
 # Exit codes (stable contract the agent branches on; see reference.md).
 #   0  ok        (a query that legitimately matches nothing is also 0 + empty)
-#   20 precondition / usage failure (missing tool, not in a repo, bad args)
-#   30 missing-artifact (a task's review branch or base is not present locally)
+#   20 precondition / usage failure (missing tool, not in a repo, dirty
+#      worktree, bad args)
+#   30 missing-artifact (branch/base not present locally) or merge-conflict
 # ---------------------------------------------------------------------------
 DLR_OK=0
 DLR_PRECOND=20
@@ -25,13 +28,6 @@ dlr_warn() { printf 'dev-loop-review: WARN: %s\n' "$*" >&2; }
 dlr_err()  { printf 'dev-loop-review: ERROR: %s\n' "$*" >&2; }
 # dlr_die <exit-code> <message...>
 dlr_die()  { local code="$1"; shift; dlr_err "$*"; exit "$code"; }
-
-# ---------------------------------------------------------------------------
-# Environment knobs (overridable; documented in reference.md).
-# ---------------------------------------------------------------------------
-: "${DLR_SINCE:=7d}"                       # default time window for --since / fallback
-: "${DLR_REPORT_DIR:=.dev-loop}"           # where saved review reports land (gitignored)
-export DLR_SINCE DLR_REPORT_DIR
 
 # ---------------------------------------------------------------------------
 # Preconditions.
@@ -54,9 +50,10 @@ dlr_in_git_repo() {
 }
 
 # ---------------------------------------------------------------------------
-# Taskwarrior wrappers — deterministic, non-interactive, read-only.
+# Taskwarrior wrappers — deterministic, non-interactive.
 # ---------------------------------------------------------------------------
 # dlr_task_export <filter...> — JSON array of matching tasks on stdout.
+# shellcheck disable=SC2120  # callers may pass no filter (= export everything)
 dlr_task_export() {
   task rc.confirmation=no rc.json.array=on rc.verbose=nothing "$@" export 2>/dev/null
 }
@@ -65,20 +62,37 @@ dlr_task_export() {
 # Annotation readers. dev-loop records two annotation styles:
 #   * machine state as  key=value   (box=, base=, branch=, commits=)  — last wins
 #   * human notes as     prefix: …  (summary:, acceptance:)           — collect all
-# These operate on a single task's exported JSON passed on stdin.
+# DLR_JQ_DEFS provides both as jq functions operating on one task object.
 # ---------------------------------------------------------------------------
-# dlr_anno_kv <key>   — latest value of a key=value annotation (reads stdin JSON).
-dlr_anno_kv() {
-  jq -r --arg k "$1" '
-    (.[0].annotations // []) | map(.description)
+# shellcheck disable=SC2016,SC2089  # a jq program, not a shell expansion
+DLR_JQ_DEFS='
+  def kv($k):
+    (.annotations // []) | map(.description)
     | map(select(startswith($k + "=")))
     | last // ""
-    | if . == "" then "" else (.[($k|length)+1:]) end'
-}
-# dlr_anno_notes <prefix> — all "prefix: …" notes, newline-joined (reads stdin JSON).
-dlr_anno_notes() {
-  jq -r --arg p "$1" '
-    (.[0].annotations // []) | map(.description)
-    | map(select(startswith($p + ":")))
-    | .[] | sub("^" + $p + ":\\s*"; "")'
+    | if . == "" then "" else .[($k|length)+1:] end;
+  def notes($p):
+    [ (.annotations // []) | map(.description)
+      | map(select(startswith($p + ":"))) | .[]
+      | sub("^" + $p + ":\\s*"; "") ] | join("\n");
+'
+# shellcheck disable=SC2090
+export DLR_JQ_DEFS
+
+# dlr_task_for_branch <branch> — normalized JSON of the task recording
+# branch=<branch> (last match wins across ALL statuses, since the producer is
+# usually completed), or the literal `null` when no task records it. Shape
+# matches dlr-collect.sh's .task objects:
+#   {uuid, short, description, project, status, end, base, commits,
+#    summary, acceptance}
+dlr_task_for_branch() {
+  # shellcheck disable=SC2119
+  dlr_task_export | jq --arg b "$1" "$DLR_JQ_DEFS"'
+    [ .[] | select(kv("branch") == $b) ] | last
+    | if . == null then null else
+        { uuid, short: .uuid[0:8], description,
+          project: (.project // ""), status, end: (.end // ""),
+          base: kv("base"), commits: kv("commits"),
+          summary: notes("summary"), acceptance: notes("acceptance") }
+      end'
 }
