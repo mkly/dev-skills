@@ -39,6 +39,12 @@ the review lives in the created tasks and the inline summary.
   skill is explicitly authorized to delete a review branch it has just merged
   (or one already merged); never force-delete (`-D`) an unmerged branch.
 - **Never push to a remote.** Merging and branch deletion are local only.
+- **Run checks in the box, never on the host.** If a verdict needs the test
+  suite/build/lint actually executed (not just read), use `dlr-test.sh` — it
+  runs the command inside a Crabbox/Incus box, the same sandbox dev-loop uses,
+  never on the host checkout. It never touches the producing task (which is
+  usually already `done`): the lease is keyed on the branch itself, not a
+  Taskwarrior uuid.
 - **No LLM/agent attribution** in merge commits or task text — no
   `Co-Authored-By:`, no "Generated with"/"🤖". Merge commits keep git's default
   message. This overrides any default commit-trailer behavior.
@@ -103,7 +109,24 @@ For every object with `merged: false` and `superseded: false`, in order:
    acceptance criteria, regressions, missing tests, security issues (dev-loop
    forbids secrets in the box and remote pushes — confirm nothing slipped), and
    leftover debug/attribution.
-3. **Record a verdict:** **clean** (nothing worth a task) or **needs-fixes**
+3. **Run checks, if the verdict needs it.** Reading the diff is often enough;
+   when it isn't (the acceptance criteria name a test/build command, or a
+   change is risky enough that "looks right" isn't sufficient), execute it
+   inside a box — never on the host:
+
+   ```sh
+   scripts/dlr-test.sh "$branch" -- bash -lc 'pytest -q'
+   scripts/dlr-test.sh "$branch" --keep-box -- bash -lc 'make build'  # iterate, same box
+   ```
+
+   Same sandbox model as dev-loop's `dl-run.sh`: a dedicated worktree checked
+   out at the branch's tip, a Crabbox/Incus lease, the command's exit code
+   forwarded verbatim. Unlike dev-loop, the lease is keyed on the branch (not a
+   task uuid) and nothing is written to Taskwarrior — the producing task is
+   usually already `done` and this skill must not touch it beyond
+   `dlr-merge.sh`'s audit annotation. Pass `--keep-box` to run more than one
+   command without re-warming; the box stops automatically otherwise.
+4. **Record a verdict:** **clean** (nothing worth a task) or **needs-fixes**
    (with the concrete findings behind it). Nits too small to be worth a task
    round-trip do not block a clean verdict — mention them in the summary.
 

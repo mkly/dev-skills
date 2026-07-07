@@ -96,3 +96,58 @@ dlr_task_for_branch() {
           summary: notes("summary"), acceptance: notes("acceptance") }
       end'
 }
+
+# ---------------------------------------------------------------------------
+# Crabbox/Incus knobs for dlr-test.sh — a review branch's producing task is
+# usually already `done` (its own dev-loop box long stopped), and this skill
+# must never mutate that task beyond dlr-merge.sh's audit annotation. So
+# dlr-test.sh's box lease is keyed on the BRANCH (deterministic slug), never on
+# a Taskwarrior uuid/annotation — no claim, no task write, fully stateless.
+# Names match dev-loop's own env vars so one config works for both skills.
+# ---------------------------------------------------------------------------
+: "${CRABBOX_PROVIDER:=incus}"
+: "${DLR_TEST_TTL:=30m}"        # short-lived: one review check, not a work session
+: "${INCUS_IMAGE:=}"            # optional -incus-image override
+: "${INCUS_TYPE:=}"             # optional -incus-instance-type (container|vm)
+: "${INCUS_REMOTE:=}"           # optional -incus-remote
+: "${DLR_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop-review}"
+: "${DLR_WORKTREE_DIR:=${DLR_STATE_DIR}/worktrees}"  # per-branch checkouts (outside the repo tree)
+export CRABBOX_PROVIDER DLR_TEST_TTL INCUS_IMAGE INCUS_TYPE INCUS_REMOTE DLR_STATE_DIR DLR_WORKTREE_DIR
+
+# dlr_crabbox_incus_flags — Incus overrides as extra `crabbox` args, only when set.
+dlr_crabbox_incus_flags() {
+  local -a f=()
+  [ -n "$INCUS_IMAGE" ]  && f+=(-incus-image "$INCUS_IMAGE")
+  [ -n "$INCUS_TYPE" ]   && f+=(-incus-instance-type "$INCUS_TYPE")
+  [ -n "$INCUS_REMOTE" ] && f+=(-incus-remote "$INCUS_REMOTE")
+  if [ "${#f[@]}" -gt 0 ]; then printf '%s\n' "${f[@]}"; fi
+}
+
+# dlr_repo_key — stable short id for THIS repo (namespaces DLR_WORKTREE_DIR so
+# two checkouts on one machine never collide). Same derivation as dev-loop's.
+dlr_repo_key() {
+  local cdir base
+  cdir="$(git rev-parse --git-common-dir 2>/dev/null || echo .)"
+  cdir="$(cd "$cdir" 2>/dev/null && pwd -P || printf '%s' "$cdir")"
+  base="$(basename "$(dirname "$cdir")")"
+  printf '%s-%s' "$base" "$(printf '%s' "$cdir" | cksum | cut -d' ' -f1)"
+}
+
+# dlr_worktree_dir_for <slug> — absolute path of the per-branch test worktree.
+dlr_worktree_dir_for() {
+  printf '%s/%s/%s' "$DLR_WORKTREE_DIR" "$(dlr_repo_key)" "$1"
+}
+
+# dlr_slug_for_branch <branch> — deterministic, crabbox/filesystem-safe id.
+# Same branch always yields the same slug, so a box can be found by `crabbox
+# status -id <slug>` directly — no stored handle, no annotation needed.
+dlr_slug_for_branch() {
+  local words
+  words="$(printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -c 'a-z0-9' '-' \
+    | tr -s '-' \
+    | sed 's/^-//; s/-$//')"
+  words="${words:0:40}"; words="${words%-}"
+  printf 'dlrt-%s\n' "${words:-branch}"
+}
