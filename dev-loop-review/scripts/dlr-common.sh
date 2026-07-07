@@ -148,6 +148,6 @@ dlr_slug_for_branch() {
     | tr -c 'a-z0-9' '-' \
     | tr -s '-' \
     | sed 's/^-//; s/-$//')"
-  words="${words:0:40}"; words="${words%-}"
+  words="${words:0:36}"; words="${words%-}"
   printf 'dlrt-%s\n' "${words:-branch}"
 }
