@@ -86,15 +86,31 @@ export DLR_JQ_DEFS
 #   {uuid, short, description, project, status, end, base, commits,
 #    summary, acceptance}
 dlr_task_for_branch() {
+  local branch="$1" raw result rc
+
+  # Do not leave this as a pipeline. Under `set -euo pipefail`, an unexpected
+  # Taskwarrior exit propagates through a caller's command substitution before
+  # the review script can explain the failure or normalize it to our contract.
   # shellcheck disable=SC2119
-  dlr_task_export | jq --arg b "$1" "$DLR_JQ_DEFS"'
+  raw="$(dlr_task_export)" || {
+    rc=$?
+    dlr_err "failed to export Taskwarrior metadata while resolving producing task for branch '${branch}' (task exit ${rc})"
+    return "$DLR_PRECOND"
+  }
+
+  result="$(printf '%s' "$raw" | jq --arg b "$branch" "$DLR_JQ_DEFS"'
     [ .[] | select(kv("branch") == $b) ] | last
     | if . == null then null else
         { uuid, short: .uuid[0:8], description,
           project: (.project // ""), status, end: (.end // ""),
           base: kv("base"), commits: kv("commits"),
           summary: notes("summary"), acceptance: notes("acceptance") }
-      end'
+      end')" || {
+    rc=$?
+    dlr_err "failed to parse Taskwarrior metadata while resolving producing task for branch '${branch}' (jq exit ${rc})"
+    return "$DLR_PRECOND"
+  }
+  printf '%s\n' "$result"
 }
 
 # ---------------------------------------------------------------------------
