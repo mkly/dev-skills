@@ -80,6 +80,17 @@ else
   dlr_log "merged '$BRANCH' into '$cur'"
 fi
 
+# A dlr-test.sh (or other) worktree may still have $BRANCH checked out;
+# git branch -d refuses to delete a branch checked out elsewhere, so remove
+# any such worktree first.
+while IFS= read -r wt_path; do
+  [ -n "$wt_path" ] || continue
+  git worktree remove --force "$wt_path" >&2 \
+    || dlr_warn "could not remove worktree at $wt_path (still holding '$BRANCH'?)"
+done < <(git worktree list --porcelain \
+  | awk -v b="refs/heads/${BRANCH}" '/^worktree /{p=$2} /^branch /{if ($2==b) print p}')
+git worktree prune >/dev/null 2>&1 || true
+
 git branch -d "$BRANCH" >&2
 dlr_log "deleted review branch '$BRANCH'"
 
