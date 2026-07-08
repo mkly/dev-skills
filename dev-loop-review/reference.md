@@ -187,6 +187,14 @@ scripts/dlr-diff.sh "$branch"
 scripts/dlr-test.sh "$branch" -- bash -lc 'pytest -q'
 echo "exit: $?"          # 0 → verdict leans clean; nonzero → needs-fixes
 ```
+A fresh box has no Python virtualenv or installed dependencies — a bare
+`pytest`/`uv pip install` fails with "No virtual environment found". For a
+Python repo, bootstrap one in the same command (`--keep-box` while iterating
+so the venv survives across calls instead of being rebuilt every time):
+```sh
+scripts/dlr-test.sh "$branch" --keep-box \
+  -- bash -lc 'uv venv && uv pip install -e .[dev] && pytest -q'
+```
 
 **Iterate several checks against one branch without re-warming:**
 ```sh
@@ -233,6 +241,11 @@ task <uuid> info
   elsewhere?)".** Two working trees can't hold the same branch at once. Find
   the other checkout with `git worktree list` and remove/finish it, or wait
   for whatever else is using it.
+- **Command fails with "No virtual environment found" / bare `uv pip install`
+  errors.** The box starts with no Python venv or dependencies installed —
+  there's no bootstrap hook, so prefix the wrapped command with
+  `uv venv && uv pip install -e .[dev] &&` (see the recipe above). Use
+  `--keep-box` while iterating so the venv isn't rebuilt on every call.
 - **`dlr-test.sh` exits `20` "crabbox warmup failed".** The stderr above the
   error is crabbox's own output — treat it like any other `crabbox warmup`
   failure (provider/image/remote misconfigured, Incus not reachable, quota).
