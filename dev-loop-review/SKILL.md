@@ -162,7 +162,13 @@ task "$fix" annotate "review-of: <task.short> $branch"     # link back to the re
 - `input:` is the annotation dev-loop's `dl-box.sh` reads to root the fix
   task's worktree at the review branch — the fix lands as a new increment on
   top of the reviewed work.
-- Use `depends:` between fix tasks when one must land before another.
+- Use `depends:` between fix tasks when one must land before another. In
+  particular, if two findings touch the same file, don't file both with
+  `input: $branch` (the same original review branch) — chain them: the later
+  fix task's `input:` should name the earlier fix task's own review branch
+  (`review/<earlier-fix-slug>`) instead, plus `depends:<earlier-fix-uuid>`.
+  Siblings rooted on the same branch that edit the same lines are guaranteed to
+  conflict for every branch after the first one merges.
 - **Leave the branch alone** — do not merge or delete it; the fix task owns it
   now (the next `dlr-collect.sh` run will show it as `superseded`).
 

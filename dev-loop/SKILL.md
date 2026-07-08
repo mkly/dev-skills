@@ -113,6 +113,22 @@ it). `dl-box.sh` reads the latest `input:` annotation automatically on the first
 warm and records the resolved commit as `base=`; use `dl-box.sh --base <ref>` only
 when you intentionally need to override that input.
 
+**Stack fix tasks that touch the same files; don't branch siblings off one
+base.** When decomposing findings into fix tasks (e.g. from a review pass),
+check which files each fix will touch. If two or more fix tasks will edit the
+same file, root them on the same base only if they truly touch disjoint lines
+— otherwise chain them: each later task's `input:` names the earlier task's
+`review/<slug>` branch, plus `depends:<earlier-uuid>`, so it edits on top of the
+prior fix rather than in parallel with it. Sibling branches that each edit the
+same lines from a shared base are guaranteed to conflict for every branch after
+the first to merge — the conflict is discovered late (at `dlr-merge.sh`/review
+time) instead of avoided at decomposition time:
+
+```sh
+task <later-fix> modify depends:<earlier-fix>
+task <later-fix> annotate "input: review/<earlier-fix-slug>"
+```
+
 **Stacked chains need an integration acceptance criterion on the final task.**
 When a sequence of tasks each build on the previous one's branch (`input:`
 chains to the prior task's `review/<slug>`), passing each task's own acceptance
