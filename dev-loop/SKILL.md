@@ -113,6 +113,22 @@ it). `dl-box.sh` reads the latest `input:` annotation automatically on the first
 warm and records the resolved commit as `base=`; use `dl-box.sh --base <ref>` only
 when you intentionally need to override that input.
 
+**Stacked chains need an integration acceptance criterion on the final task.**
+When a sequence of tasks each build on the previous one's branch (`input:`
+chains to the prior task's `review/<slug>`), passing each task's own acceptance
+criterion only proves that increment in isolation — it does not prove the
+increments actually wire together. Give the *final* task in such a chain an
+additional acceptance criterion that asserts the assembled system works
+end-to-end, not just that its own slice works, e.g.:
+
+```sh
+task <final-in-chain> annotate "acceptance: end-to-end — <the whole chain's behavior, exercised together, e.g. request flows from A through B to C and produces the expected result>"
+```
+
+Without this, integration gaps between increments (a piece built but never
+called, output produced but never consumed) can hide behind a string of
+individually-passing tasks.
+
 ## Phase 2 — Claim (the lock)
 
 ```sh

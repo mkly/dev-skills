@@ -130,6 +130,19 @@ For every object with `merged: false` and `superseded: false`, in order:
    (with the concrete findings behind it). Nits too small to be worth a task
    round-trip do not block a clean verdict — mention them in the summary.
 
+**Chain tips get an integration check.** If the branch under review is the tip
+of a stacked chain (its task's `input:` points at a prior task's branch, which
+in turn had its own `input:`), judge it against the *chain's* assembled
+behavior, not only its own slice — the earlier increments already passed their
+individual acceptance criteria, so re-checking each in isolation adds nothing.
+Look for an `acceptance:` on this task that asserts end-to-end behavior across
+the chain. If one exists, verify the assembled system actually satisfies it
+(read the diff across the whole chain, or run it in a box). If the final task
+in the chain carries no such criterion, treat that absence itself as a finding:
+note it in the summary as a decomposition smell (each increment may have
+passed alone while never being joined end-to-end) even if the diff otherwise
+looks clean.
+
 ## Phase 3 — Act on each verdict
 
 ### needs-fixes → create fix tasks (dev-loop Phase 1 conventions)
