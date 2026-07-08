@@ -54,7 +54,7 @@ cur="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 [ "$cur" != "$BRANCH" ] || dlr_die "$DLR_PRECOND" "'$BRANCH' is the current branch; check out the target branch first"
 git rev-parse --verify --quiet "refs/heads/${BRANCH}" >/dev/null \
   || dlr_die "$DLR_MISSING" "review branch '${BRANCH}' is not present locally"
-[ -z "$(git status --porcelain)" ] \
+[ -z "$(git status --porcelain --untracked-files=no)" ] \
   || dlr_die "$DLR_PRECOND" "worktree is dirty; commit or stash before merging review branches"
 
 already_merged=0
@@ -79,6 +79,17 @@ else
   fi
   dlr_log "merged '$BRANCH' into '$cur'"
 fi
+
+# A dlr-test.sh (or other) worktree may still have $BRANCH checked out;
+# git branch -d refuses to delete a branch checked out elsewhere, so remove
+# any such worktree first.
+while IFS= read -r wt_path; do
+  [ -n "$wt_path" ] || continue
+  git worktree remove --force "$wt_path" >&2 \
+    || dlr_warn "could not remove worktree at $wt_path (still holding '$BRANCH'?)"
+done < <(git worktree list --porcelain \
+  | awk -v b="refs/heads/${BRANCH}" '/^worktree /{p=$2} /^branch /{if ($2==b) print p}')
+git worktree prune >/dev/null 2>&1 || true
 
 git branch -d "$BRANCH" >&2
 dlr_log "deleted review branch '$BRANCH'"
