@@ -108,6 +108,13 @@ across worktrees, so the `review/<slug>` branch a task produces is still visible
 from the main checkout.) `dl-run.sh` and `dl-merge-back.sh` cd into the worktree
 automatically; you do not pass the path.
 
+`dl-box.sh` blocks until Crabbox has finished warming a new lease. Keep the
+command in a persistent session until it exits; `warming box` is only a progress
+message. Phase 3 may proceed only after exit `0`, a handle on stdout, and a
+matching `box=<handle>` annotation on the task. If the command session ends
+before then, run `dl-status.sh` before retrying so any partially-created lease
+is reconciled rather than leaked.
+
 The box is a build/test sandbox only. Do NOT edit inside the box — Crabbox does
 not forward stdin into `run` commands (so heredoc/pipe-driven in-box editors
 silently get no input) and it never syncs `.git`, so in-box state is unreliable

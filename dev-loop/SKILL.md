@@ -43,6 +43,13 @@ git worktree is snapshotted into a new local branch for review.
   worktree automatically. `git add` any NEW files so they sync up too.
 - **Diagnostics go to stderr; stdout is parseable.** Each script prints its one
   machine-relevant value (claimed uuid, box handle, branch name) to stdout.
+- **Wait for a box to finish warming.** `dl-box.sh` is a blocking operation: a
+  fresh lease may take minutes. Run it in a persistent command session and wait
+  for its actual exit. Its initial `warming box` diagnostic is progress, not
+  completion. Do not invoke `dl-run.sh` or retry `dl-box.sh` until it exits `0`,
+  prints a box handle, and the task records `box=<handle>`. If the session ends
+  early, run `dl-status.sh` before doing anything else so a partially-created
+  lease is not mistaken for a failed warmup or leaked by a blind retry.
 - **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
   precondition/usage · `30` merge-back empty/conflict/branch-collision.
 
@@ -172,6 +179,13 @@ Always capture the uuid from stdout and use it for every subsequent phase.
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
 ```
+
+For a fresh lease, keep the `dl-box.sh` command alive until it exits. The
+`warming box` line only means provisioning has begun; success is the printed
+handle plus the task's `box=` annotation. Do not use an execution API's early
+yield/progress result as evidence of completion. If the command session is
+lost, reconcile with `dl-status.sh` before retrying so the existing lease can
+be recovered or cleaned up deliberately.
 
 - `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
   scratch branch `dl/<slug>` rooted at `--base <ref>`, else the task's latest
