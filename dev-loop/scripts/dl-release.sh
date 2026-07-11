@@ -60,8 +60,14 @@ if [ -n "$handle" ]; then
   elif [ -n "$DL_DRY_RUN" ]; then
     dl_log "DRY-RUN: park box $handle for the next task"
   elif dl_box_alive "$handle"; then
-    dl_idle_box_park "$handle"
-    dl_log "parked box $handle for the next task (idle timeout will reap it)"
+    parked="$(head -n1 "$(dl_idle_box_file)" 2>/dev/null || true)"
+    if [ -n "$parked" ] && [ "$parked" != "$handle" ] && dl_box_alive "$parked"; then
+      dl_log "a box is already parked ($parked); stopping box $handle"
+      dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
+    else
+      dl_idle_box_park "$handle"
+      dl_log "parked box $handle for the next task (idle timeout will reap it)"
+    fi
   else
     dl_warn "could not park box $handle (it is no longer live)"
   fi

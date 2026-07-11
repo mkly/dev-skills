@@ -65,6 +65,7 @@ fi
 
 declare -a ORPHANS=()
 had_lease=0
+parked_box="$(head -n1 "$(dl_idle_box_file)" 2>/dev/null || true)"
 while IFS=$'\t' read -r lid lslug llabel; do
   [ -n "$lid$lslug" ] || continue
   had_lease=1
@@ -76,6 +77,8 @@ while IFS=$'\t' read -r lid lslug llabel; do
   if [ -z "$ref" ] && [ -n "$lslug" ]; then ref="${REF_UUID[$lslug]:-}"; fi
   if [ -n "$ref" ]; then
     printf '  %-28s  task %s  %s\n' "${lid:-$lslug}" "${ref:0:8}" "${llabel}"
+  elif [ -n "$parked_box" ] && { [ "$lid" = "$parked_box" ] || [ "$lslug" = "$parked_box" ]; }; then
+    printf '  %-28s  PARKED (idle box awaiting next task)  %s\n' "${lid:-$lslug}" "${llabel}"
   else
     printf '  %-28s  ORPHAN (no pending task references it)  %s\n' "${lid:-$lslug}" "${llabel}"
     ORPHANS+=("${lid:-$lslug}")

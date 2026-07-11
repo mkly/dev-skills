@@ -156,6 +156,10 @@ ensure_worktree "$wt" "$wbranch" "$base"
 # 2. Reuse an existing live box if one is recorded.
 existing="$(dl_anno_get "$UUID" box)"
 if [ -n "$existing" ] && dl_box_alive "$existing"; then
+  # A released-then-reclaimed task's box may also be the repo's parked box; take
+  # it off the parked file so another task cannot adopt it out from under us.
+  parked="$(dl_idle_box_claim)"
+  if [ -n "$parked" ] && [ "$parked" != "$existing" ]; then dl_idle_box_park "$parked"; fi
   dl_log "reusing live box for $UUID: $existing (worktree: $wt)"
   printf '%s\n' "$existing"
   exit "$DL_OK"
