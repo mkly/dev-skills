@@ -100,7 +100,14 @@ task <uuid> annotate "acceptance: <how we know it's done>"
 task project:<goal-slug> export | jq -r '.[] | "\(.uuid[0:8])  \(.description)"'
 ```
 
-Keep tasks small enough that one fits in one box and one review branch.
+Keep tasks small enough that one fits in one box and one review branch — but no
+smaller. Every task pays the same fixed overhead (claim, box warmup, sync,
+merge-back, review), so **batch trivial fixes**: several small related changes
+(typo-level, doc-only, or single-file tweaks touching disjoint files) should be
+one task with one box and one review branch, not one task each. Split only when
+the pieces need different bases, different reviewers, or genuinely independent
+accept/reject decisions. Keep annotations proportional to the task: a trivial
+task needs one short `acceptance:` line, not a paragraph of scope prose.
 
 **Wire each task to its inputs explicitly.** A downstream task usually needs the
 *output* of an upstream one — the `review/<producer-slug>` branch the producer
@@ -202,6 +209,11 @@ be recovered or cleaned up deliberately.
   worktree, syncs it **up on every run** (the worktree is the source of truth),
   and forwards the in-box command's exit code verbatim. The box is for building
   and testing only — never edit inside it.
+- **Scope test runs to the change.** While iterating, run the tests named by the
+  task's acceptance criteria (or covering the touched files), not the full
+  suite. Run the broader suite at most once, right before merge-back, and only
+  when the change could plausibly affect code outside its own slice — a
+  prompt-text or doc change does not need 400 unrelated tests re-proven.
 - Crabbox syncs only git-**tracked** files, so box-generated build artifacts
   survive a sync, but **NEW files you create must be `git add`-ed to reach the
   box** (merge-back snapshots the whole worktree, so it picks up untracked
@@ -279,6 +291,15 @@ or pass `--force` / `--keep-worktree` intentionally.
 ## Loop
 
 Repeat Phases 2–5 per task, honoring dependencies (claim only `+READY` tasks).
+
+**Keep per-task ceremony proportional.** The safety rules (claim before work,
+edit in the worktree, merge back locally, record `summary:`) are fixed; the
+deliberation is not. For a small task, read its annotations, make the change,
+run its acceptance tests, and merge back — do not re-run `dl-setup.sh`, re-read
+reference.md, or re-survey `dl-status.sh` on every iteration when nothing has
+gone wrong. `dl-status.sh` is for reconciling after a failure or at the end of
+the loop, not a per-task ritual.
+
 When `dl-claim.sh` auto-pick returns empty, the goal's ready work is done — run
 `/path/to/dev-loop-skill/scripts/dl-status.sh` to confirm no orphan leases
 remain, then report what landed on which review branches.
