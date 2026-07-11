@@ -158,38 +158,7 @@ fi
 
 # 3. Warm a new lease.
 mapfile -t incus_flags < <(dl_crabbox_incus_flags)
-handle=""
-
-# Prefer an already-hydrated lease from the ready pool. The pool's repository
-# and setup fingerprint must match this checkout, otherwise crabbox leaves it
-# available for a compatible consumer. A missing broker or an empty pool is not
-# an error: the normal warmup below remains the fallback.
-pool_repo="$(git config --get remote.origin.url 2>/dev/null || true)"
-pool_repo="${pool_repo#git@github.com:}"
-pool_repo="${pool_repo#https://github.com/}"
-pool_repo="${pool_repo%.git}"
-pool_fingerprint="$(git rev-parse HEAD 2>/dev/null || true)"
-if [ -n "$DEV_LOOP_POOL_KEY" ] && [ -n "$pool_repo" ] && [ -n "$pool_fingerprint" ] && [ -z "$DL_DRY_RUN" ]; then
-  borrowout="$(mktemp "${TMPDIR:-/tmp}/dl-borrow.XXXXXX")"
-  trap 'rm -f "${borrowout:-}" "${warmout:-}"' EXIT
-  if ( cd "$wt" && crabbox pool borrow "$DEV_LOOP_POOL_KEY" \
-      -provider "$CRABBOX_PROVIDER" -repo "$pool_repo" \
-      -fingerprint "$pool_fingerprint" -json ) >"$borrowout" 2>&1; then
-    cand="$(jq -r '.id // .ID // .lease // .handle // empty' "$borrowout" 2>/dev/null | head -n1 || true)"
-    if [ -n "$cand" ] && box_alive "$cand"; then
-      handle="$cand"
-      dl_log "borrowed ready-pool box for $UUID: $handle"
-    else
-      dl_warn "ready-pool borrow returned no live handle; falling back to warmup"
-    fi
-  else
-    dl_log "no compatible ready-pool box; warming a fresh lease"
-  fi
-fi
-
-if [ -n "$handle" ]; then
-  :
-elif [ -n "$DL_DRY_RUN" ]; then
+if [ -n "$DL_DRY_RUN" ]; then
   dl_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER ${incus_flags[*]:-} -slug $slug -ttl $DEV_LOOP_TTL"
   handle="$slug"
 else
@@ -210,6 +179,7 @@ else
 
   # Resolve an authoritative handle: prefer a cbx_ id from the output, else the
   # requested slug, else a slug match in `crabbox list`. Confirm with `status`.
+  handle=""
   cand="$(grep -oE 'cbx_[A-Za-z0-9_-]+' "$warmout" | head -n1 || true)"
   if [ -n "$cand" ] && box_alive "$cand"; then handle="$cand"; fi
   if [ -z "$handle" ] && box_alive "$slug"; then handle="$slug"; fi

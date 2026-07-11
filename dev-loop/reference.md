@@ -31,7 +31,6 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `CRABBOX_PROVIDER`    | `incus`                                   | Crabbox provider. Passed to **every** crabbox call (bare `crabbox list` defaults elsewhere and fails). |
 | `DEV_LOOP_TTL`        | `2h`                                      | Lease TTL passed to `crabbox warmup -ttl`. |
 | `DEV_LOOP_STALE`      | `4h`                                      | Age past which `dl-status.sh` flags an active claim `[STALE]`. (Stealing still requires an explicit `--steal-after`.) |
-| `DEV_LOOP_POOL_KEY`   | `dev-loop`                                | Crabbox ready-pool key. Set empty to disable borrowing and always use cold warmup. |
 | `INCUS_IMAGE`         | (unset → crabbox default)                 | Optional `-incus-image` override; applied only at warmup. |
 | `INCUS_TYPE`          | (unset → `container`)                     | Optional `-incus-instance-type` (`container`\|`vm`); warmup only. |
 | `INCUS_REMOTE`        | (unset → local)                           | Optional `-incus-remote`; warmup only. |
@@ -45,20 +44,6 @@ Note: Incus flags (`-incus-image`/`-incus-instance-type`/`-incus-remote`) are
 **warmup-only**. A warmed lease already encodes its config, so `run`/`status`/
 `stop` pass only `-provider`/`-id`. Setting `INCUS_*` after a box is warmed has
 no effect until the next warmup.
-
-### Ready-pool stocking
-
-`dl-box.sh` first borrows a compatible ready-pool lease, filtered to the
-checkout's GitHub repository and current commit fingerprint. If no compatible
-lease is available (or no broker is configured), it falls back to the normal
-cold warmup. Stock the same pool ahead of time with:
-
-```sh
-crabbox prewarm -provider incus -pool dev-loop
-crabbox pool ensure dev-loop -min-ready 1 -create
-```
-
-Use the same key as `DEV_LOOP_POOL_KEY` when choosing a different pool.
 
 ## Scripts at a glance
 
