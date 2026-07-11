@@ -70,7 +70,7 @@ $S/dl-run.sh "$uuid" -- bash -lc 'make && make test'
 branch="$($S/dl-merge-back.sh "$uuid")"           # Phase 4: → new local branch
 base="$(task "$uuid" export | jq -r '.[0].annotations | map(.description) | map(select(startswith("base="))) | last | .[5:]')"
 git log --oneline "$base..$branch"               # review (script also prints log/stat)
-$S/dl-done.sh "$uuid"                             # Phase 5: complete + free the box
+$S/dl-done.sh "$uuid"                             # Phase 5: complete + park the box for reuse
 ```
 
 `dl-status.sh` (read-only) reconciles claims against live leases at any time.

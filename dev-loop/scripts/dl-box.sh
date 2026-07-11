@@ -60,10 +60,16 @@ project="$(dl_task_field "$UUID" '.project // ""')"
 slug="$(dl_slug "$UUID" "$desc")"
 label="${project:-dev-loop}/${UUID}"
 
-# box_alive <handle> — true if crabbox can see a live lease by that id/slug.
-box_alive() {
-  [ -n "$1" ] || return 1
-  crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
+# adoptable <handle> — true if the lease is live AND has at least 30 minutes
+# of absolute TTL left, so an adopted box does not expire mid-task. Leases
+# without TTL labels are treated as adoptable (liveness alone).
+adoptable() {
+  local j remaining
+  j="$(crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json 2>/dev/null)" || return 1
+  remaining="$(printf '%s' "$j" | jq -r '
+    ((.labels.created_at // empty | tonumber)
+     + (.labels.ttl_secs // empty | tonumber) - now) | floor' 2>/dev/null || true)"
+  [ -z "$remaining" ] || [ "$remaining" -ge 1800 ]
 }
 
 # input_ref <uuid> — latest "input: <ref>" annotation, or empty.
@@ -149,16 +155,37 @@ ensure_worktree "$wt" "$wbranch" "$base"
 
 # 2. Reuse an existing live box if one is recorded.
 existing="$(dl_anno_get "$UUID" box)"
-if [ -n "$existing" ] && box_alive "$existing"; then
+if [ -n "$existing" ] && dl_box_alive "$existing"; then
   dl_log "reusing live box for $UUID: $existing (worktree: $wt)"
   printf '%s\n' "$existing"
   exit "$DL_OK"
 fi
 [ -n "$existing" ] && dl_warn "recorded box '$existing' is gone; warming a fresh lease"
 
-# 3. Warm a new lease.
+# 3. Adopt the box parked by the previous task, if any. Adoption reclaims the
+#    lease for THIS task's worktree and syncs it up — seconds, versus ~a minute
+#    for a fresh warmup. Any failure falls through to a fresh warmup.
+handle=""
+if [ -z "$DL_DRY_RUN" ]; then
+  parked="$(dl_idle_box_claim)"
+  if [ -n "$parked" ]; then
+    if adoptable "$parked" \
+       && ( cd "$wt" && crabbox run -provider "$CRABBOX_PROVIDER" \
+              -id "$parked" -keep -reclaim -sync-only ) >&2; then
+      handle="$parked"
+      dl_log "adopted parked box $parked (skipped warmup)"
+    else
+      dl_warn "parked box '$parked' is unusable; warming a fresh lease"
+      crabbox stop -provider "$CRABBOX_PROVIDER" -id "$parked" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
+# 4. Warm a new lease if adoption did not produce one.
 mapfile -t incus_flags < <(dl_crabbox_incus_flags)
-if [ -n "$DL_DRY_RUN" ]; then
+if [ -n "$handle" ]; then
+  :
+elif [ -n "$DL_DRY_RUN" ]; then
   dl_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER ${incus_flags[*]:-} -slug $slug -ttl $DEV_LOOP_TTL"
   handle="$slug"
 else
@@ -181,20 +208,20 @@ else
   # requested slug, else a slug match in `crabbox list`. Confirm with `status`.
   handle=""
   cand="$(grep -oE 'cbx_[A-Za-z0-9_-]+' "$warmout" | head -n1 || true)"
-  if [ -n "$cand" ] && box_alive "$cand"; then handle="$cand"; fi
-  if [ -z "$handle" ] && box_alive "$slug"; then handle="$slug"; fi
+  if [ -n "$cand" ] && dl_box_alive "$cand"; then handle="$cand"; fi
+  if [ -z "$handle" ] && dl_box_alive "$slug"; then handle="$slug"; fi
   if [ -z "$handle" ]; then
     cand="$(crabbox list -provider "$CRABBOX_PROVIDER" -json 2>/dev/null \
       | jq -r --arg s "$slug" '.[]? | select((.labels.slug // .slug // .Slug // "")==$s)
                                      | (.labels.lease // .lease // (.id|strings) // .ID // .name // "")' \
       | head -n1 || true)"
-    if [ -n "$cand" ] && box_alive "$cand"; then handle="$cand"; fi
+    if [ -n "$cand" ] && dl_box_alive "$cand"; then handle="$cand"; fi
   fi
   [ -n "$handle" ] || dl_die "$DL_PRECOND" "could not resolve a live box handle after warmup"
 fi
 
-# 4. Record machine state on the task (base/worktree already recorded above).
+# 5. Record machine state on the task (base/worktree already recorded above).
 dl_anno_set "$UUID" box "$handle"
-dl_anno_event "$UUID" "box warmed: $handle (base ${base:0:12}, worktree $wt)"
+dl_anno_event "$UUID" "box ready: $handle (base ${base:0:12}, worktree $wt)"
 dl_log "box ready for $UUID: $handle (base ${base:0:12}, worktree $wt)"
 printf '%s\n' "$handle"

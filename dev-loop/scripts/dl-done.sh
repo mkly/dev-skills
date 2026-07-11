@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# dl-done.sh — Phase 5: complete a task and free its box.
+# dl-done.sh — Phase 5: complete a task and park its box for reuse.
 #
-#   dl-done.sh <uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run]
+#   dl-done.sh <uuid> [--stop-box] [--keep-worktree] [--force] [--dry-run]
 #
-# Stops the task's crabbox lease (Incus delete-on-release frees the instance),
+# Parks the task's live crabbox lease for the next task (or explicitly stops it),
 # removes the task's per-task git worktree and its scratch branch dl/<slug> (the
 # review/<slug> branch is KEPT), marks the task done (which drops it from pending
 # and releases the claim), and records a lifecycle annotation. Refuses to
@@ -18,9 +18,9 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-done.sh <uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run] [-h|--help]
+Usage: dl-done.sh <uuid> [--stop-box] [--keep-worktree] [--force] [--dry-run] [-h|--help]
 
-  --keep-box       leave the crabbox lease running (default: stop it)
+  --stop-box       stop the crabbox lease instead of parking it for reuse
   --keep-worktree  leave the per-task worktree + scratch branch in place
   --force          complete even if the claim is owned by another owner, and
                    bypass the unmerged-worktree guard
@@ -30,10 +30,11 @@ Exit: 0 ok, 10 owned by another (use --force), 20 precondition.
 EOF
 }
 
-UUID=""; KEEP_BOX=0; KEEP_WT=0; FORCE=0
+UUID=""; STOP_BOX=0; KEEP_WT=0; FORCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --keep-box)      KEEP_BOX=1 ;;
+    --stop-box)      STOP_BOX=1 ;;
+    --keep-box)      dl_warn "--keep-box is deprecated; parking is now the default" ;;
     --keep-worktree) KEEP_WT=1 ;;
     --force)    FORCE=1 ;;
     --dry-run)  DL_DRY_RUN=1 ;;
@@ -59,15 +60,6 @@ assignee="$(dl_task_field "$UUID" '.assignee // ""')"
 owner_base="${assignee%%#*}"
 if [ -n "$owner_base" ] && [ "$owner_base" != "$DEV_LOOP_OWNER" ] && [ "$FORCE" -ne 1 ]; then
   dl_die "$DL_LOST" "task $UUID is owned by '$owner_base', not you ($DEV_LOOP_OWNER); use --force to complete anyway"
-fi
-
-# Stop the box (best-effort) unless asked to keep it.
-if [ "$KEEP_BOX" -ne 1 ]; then
-  handle="$(dl_anno_get "$UUID" box)"
-  if [ -n "$handle" ]; then
-    dl_log "stopping box $handle"
-    dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
-  fi
 fi
 
 branch="$(dl_anno_get "$UUID" branch)"
@@ -99,7 +91,7 @@ if [ "$KEEP_WT" -ne 1 ]; then
       if [ "$cwd_phys" = "$wt_phys" ] || [[ "$cwd_phys" == "$wt_phys/"* ]]; then
         main_checkout="$(git -C "$wt" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n1 || true)"
         retry_cmd="$0 $UUID"
-        [ "$KEEP_BOX" -eq 1 ] && retry_cmd="$retry_cmd --keep-box"
+        [ "$STOP_BOX" -eq 1 ] && retry_cmd="$retry_cmd --stop-box"
         [ "$FORCE" -eq 1 ] && retry_cmd="$retry_cmd --force"
         dl_warn "current directory is inside the worktree being removed; leaving it in place"
         if [ -n "$main_checkout" ] && [ "$main_checkout" != "$wt_phys" ]; then
@@ -122,6 +114,23 @@ if [ "$KEEP_WT" -ne 1 ]; then
       || dl_warn "could not delete scratch branch $wbranch (may already be gone)"
   elif [ -n "$wt" ]; then
     dl_warn "not inside a git repo; leaving worktree $wt in place (remove with: git worktree remove --force '$wt')"
+  fi
+fi
+
+# Only expose the lease for reuse after the unmerged-worktree guard and cleanup
+# have succeeded. Crabbox's idle timeout reaps it if the loop ends here.
+handle="$(dl_anno_get "$UUID" box)"
+if [ -n "$handle" ]; then
+  if [ "$STOP_BOX" -eq 1 ]; then
+    dl_log "stopping box $handle"
+    dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
+  elif [ -n "$DL_DRY_RUN" ]; then
+    dl_log "DRY-RUN: park box $handle for the next task"
+  elif dl_box_alive "$handle"; then
+    dl_idle_box_park "$handle"
+    dl_log "parked box $handle for the next task (idle timeout will reap it)"
+  else
+    dl_warn "could not park box $handle (it is no longer live)"
   fi
 fi
 

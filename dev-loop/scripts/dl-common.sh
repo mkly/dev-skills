@@ -238,6 +238,43 @@ dl_crabbox_incus_flags() {
 }
 
 # ---------------------------------------------------------------------------
+# Idle-box parking — dl-done.sh parks a still-live lease instead of stopping
+# it, and the next dl-box.sh in the same repo adopts it (reclaim + sync)
+# instead of paying a fresh warmup. State is one file per repo holding the
+# lease handle; crabbox's own idle timeout reaps a parked box nobody adopts.
+# Claiming is an atomic rename so two concurrent dl-box.sh runs can never
+# adopt the same box.
+# ---------------------------------------------------------------------------
+# dl_box_alive <handle> — true if crabbox can see a live lease by that id/slug.
+dl_box_alive() {
+  [ -n "${1:-}" ] || return 1
+  crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
+}
+
+# dl_idle_box_file — path of this repo's parked-box state file.
+dl_idle_box_file() {
+  printf '%s/idle-box-%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)"
+}
+
+# dl_idle_box_park <handle> — record <handle> as this repo's parked box.
+dl_idle_box_park() {
+  mkdir -p "$DEV_LOOP_STATE_DIR"
+  printf '%s\n' "$1" >"$(dl_idle_box_file)"
+}
+
+# dl_idle_box_claim — atomically take the parked handle; prints it, or nothing
+# when no box is parked (or another claimer won the rename race).
+dl_idle_box_claim() {
+  local f claim handle
+  f="$(dl_idle_box_file)"
+  claim="${f}.claim.$$"
+  mv "$f" "$claim" 2>/dev/null || return 0
+  handle="$(head -n1 "$claim" 2>/dev/null || true)"
+  rm -f "$claim"
+  [ -z "$handle" ] || printf '%s\n' "$handle"
+}
+
+# ---------------------------------------------------------------------------
 # Per-task worktree helpers.
 #
 # Each task edits in its own git worktree on a scratch branch, so many agents

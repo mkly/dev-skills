@@ -253,7 +253,7 @@ records `branch=` on the task.
 # Record what was done before completing — a durable, human-readable note on the
 # task itself (commits are already linked by merge-back's commits= annotation):
 task "$uuid" annotate "summary: <what changed and why, in 1–2 lines>"
-/path/to/dev-loop-skill/scripts/dl-done.sh "$uuid"        # task done + stop box + annotate (default)
+/path/to/dev-loop-skill/scripts/dl-done.sh "$uuid"        # task done + park box for reuse + annotate
 ```
 
 Annotations are Taskwarrior's note mechanism — timestamped freeform text on a
@@ -262,9 +262,9 @@ was done* (and any follow-ups/caveats); the box, base, branch, and commit range
 are already recorded automatically. This keeps the completed task self-describing
 for later review via `task <uuid> info`.
 
-`task done` drops the task from pending (releasing the claim); the box is stopped
-(Incus delete-on-release frees the instance) unless `--keep-box`, and the task's
-worktree + scratch branch `dl/<slug>` are removed unless `--keep-worktree`. The
+`task done` drops the task from pending (releasing the claim); the live box is
+parked for the next task unless `--stop-box`, and the task's worktree + scratch
+branch `dl/<slug>` are removed unless `--keep-worktree`. The
 `review/<slug>` branch is shared in the repo and is always KEPT for review.
 If the worktree differs from `base=` and no `branch=` was recorded, `dl-done.sh`
 exits `20` and leaves the worktree in place; run `dl-merge-back.sh "$uuid"` first
@@ -272,7 +272,7 @@ or pass `--force` / `--keep-worktree` intentionally.
 
 - **Abandon instead of complete:** `/path/to/dev-loop-skill/scripts/dl-release.sh "$uuid" [--stop-box]`
   stops the task and clears `assignee` so another owner can claim it; the task
-  stays pending.
+  stays pending. Its live box is parked for reuse unless `--stop-box`.
 - **Reconcile:** `/path/to/dev-loop-skill/scripts/dl-status.sh` (read-only) lists active claims with
   owner + age + `[STALE]`, live Crabbox leases, **orphan** leases (running but no
   pending task references them), dangling box refs, per-task worktrees (flagging

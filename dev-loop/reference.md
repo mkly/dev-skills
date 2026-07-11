@@ -51,11 +51,11 @@ no effect until the next warmup.
 |---------------------|---------------------------------------------------|-------------------|-------|
 | `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
 | `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | flock + CAS lock. Auto-pick when no uuid. |
-| `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm-or-reuse one lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
+| `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
 | `dl-run.sh`         | `<uuid> [--force] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
-| `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; clears `assignee`; task stays pending (worktree left intact). |
-| `dl-done.sh`        | `<uuid> [--keep-box] [--keep-worktree] [--force] [--dry-run]` | —          | `task done` + stop box + remove worktree & scratch branch `dl/<slug>`. Refuses to remove changed work with no `branch=` unless forced/kept. `review/<slug>` is kept. Idempotent if already done. |
+| `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; park the live lease for reuse (or stop with `--stop-box`), clear `assignee`; task stays pending and its worktree remains. |
+| `dl-done.sh`        | `<uuid> [--stop-box] [--keep-worktree] [--force] [--dry-run]` | —          | `task done` + park the live lease for reuse (or stop with `--stop-box`) + remove worktree and scratch branch `dl/<slug>`. Refuses to remove changed work with no `branch=` unless forced/kept. `review/<slug>` is kept. |
 | `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease/worktree reconciliation. Mutates nothing. |
 
 ## Recipes
@@ -114,6 +114,14 @@ message. Phase 3 may proceed only after exit `0`, a handle on stdout, and a
 matching `box=<handle>` annotation on the task. If the command session ends
 before then, run `dl-status.sh` before retrying so any partially-created lease
 is reconciled rather than leaked.
+
+After `dl-done.sh` or `dl-release.sh`, a still-live lease is parked for this
+repository instead of being stopped. The next `dl-box.sh` atomically claims it,
+reclaims it for the new task's worktree, and performs a sync-only run. This
+keeps the instance and its build caches warm across sequential tasks; Crabbox's
+30-minute idle timeout cleans it up when the loop ends. Pass `--stop-box` when
+a pristine next box or immediate cleanup matters. A reused box retains the
+previous task's untracked build state.
 
 The box is a build/test sandbox only. Do NOT edit inside the box — Crabbox does
 not forward stdin into `run` commands (so heredoc/pipe-driven in-box editors

@@ -4,7 +4,8 @@
 #   dl-release.sh <uuid> [--stop-box] [--force] [--dry-run]
 #
 # Stops the task (clears +ACTIVE), clears the assignee so another owner can
-# claim it, and optionally stops the box. Refuses to release a claim owned by a
+# claim it, and parks its box for the next task unless explicitly stopped.
+# Refuses to release a claim owned by a
 # different owner unless --force. The task stays pending and re-claimable.
 #
 # Exit: 0 ok, 10 owned by another owner (without --force), 20 precondition.
@@ -50,12 +51,19 @@ if [ -n "$owner_base" ] && [ "$owner_base" != "$DEV_LOOP_OWNER" ] && [ "$FORCE" 
   dl_die "$DL_LOST" "task $UUID is owned by '$owner_base', not you ($DEV_LOOP_OWNER); use --force to release anyway"
 fi
 
-# Optionally stop the box first (best-effort; it may already be gone).
-if [ "$STOP_BOX" -eq 1 ]; then
-  handle="$(dl_anno_get "$UUID" box)"
-  if [ -n "$handle" ]; then
+# Park the box by default so the next task avoids a fresh warmup.
+handle="$(dl_anno_get "$UUID" box)"
+if [ -n "$handle" ]; then
+  if [ "$STOP_BOX" -eq 1 ]; then
     dl_log "stopping box $handle"
     dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
+  elif [ -n "$DL_DRY_RUN" ]; then
+    dl_log "DRY-RUN: park box $handle for the next task"
+  elif dl_box_alive "$handle"; then
+    dl_idle_box_park "$handle"
+    dl_log "parked box $handle for the next task (idle timeout will reap it)"
+  else
+    dl_warn "could not park box $handle (it is no longer live)"
   fi
 fi
 
