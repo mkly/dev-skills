@@ -110,10 +110,15 @@ automatically; you do not pass the path.
 
 `dl-box.sh` blocks until Crabbox has finished warming a new lease. Keep the
 command in a persistent session until it exits; `warming box` is only a progress
-message. Phase 3 may proceed only after exit `0`, a handle on stdout, and a
-matching `box=<handle>` annotation on the task. If the command session ends
-before then, run `dl-status.sh` before retrying so any partially-created lease
-is reconciled rather than leaked.
+message. When an execution tool yields a still-running session/process ID, poll
+that same session until it returns an actual exit code; quiet polls are normal.
+For Codex, call `write_stdin` with empty input on the returned session ID and
+repeat as needed. Do not retry `dl-box.sh`, run another phase, tell the user the
+box is not ready, or end the turn while the warmup session remains live. Phase 3
+may proceed only after exit `0`, a handle on stdout, and a matching
+`box=<handle>` annotation on the task. If the session itself is lost before an
+exit result, run `dl-status.sh` before retrying so any partially-created lease is
+reconciled rather than leaked.
 
 After `dl-done.sh` or `dl-release.sh`, a still-live lease is parked for this
 repository instead of being stopped. The next `dl-box.sh` atomically claims it,

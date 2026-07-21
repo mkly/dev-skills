@@ -44,12 +44,18 @@ git worktree is snapshotted into a new local branch for review.
 - **Diagnostics go to stderr; stdout is parseable.** Each script prints its one
   machine-relevant value (claimed uuid, box handle, branch name) to stdout.
 - **Wait for a box to finish warming.** `dl-box.sh` is a blocking operation: a
-  fresh lease may take minutes. Run it in a persistent command session and wait
-  for its actual exit. Its initial `warming box` diagnostic is progress, not
-  completion. Do not invoke `dl-run.sh` or retry `dl-box.sh` until it exits `0`,
-  prints a box handle, and the task records `box=<handle>`. If the session ends
-  early, run `dl-status.sh` before doing anything else so a partially-created
-  lease is not mistaken for a failed warmup or leaked by a blind retry.
+  fresh lease may take minutes. Run it in a persistent command session. If the
+  execution tool yields a session/process ID while the command is still running,
+  that means **warmup is still in progress**, not that the box is unavailable.
+  Poll/wait on that same session (in Codex, call `write_stdin` with empty input)
+  repeatedly until the command actually exits. Its initial `warming box`
+  diagnostic and quiet periods are progress, not completion or failure. Do not
+  invoke `dl-run.sh`, retry `dl-box.sh`, or return control to the user while that
+  session is running. Proceed only after exit `0`, a printed box handle, and the
+  task's matching `box=<handle>` annotation. If the session actually disappears
+  before an exit result, run `dl-status.sh` before doing anything else so a
+  partially-created lease is not mistaken for a failed warmup or leaked by a
+  blind retry.
 - **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
   precondition/usage · `30` merge-back empty/conflict/branch-collision.
 
@@ -189,10 +195,20 @@ Always capture the uuid from stdout and use it for every subsequent phase.
 
 For a fresh lease, keep the `dl-box.sh` command alive until it exits. The
 `warming box` line only means provisioning has begun; success is the printed
-handle plus the task's `box=` annotation. Do not use an execution API's early
-yield/progress result as evidence of completion. If the command session is
-lost, reconcile with `dl-status.sh` before retrying so the existing lease can
-be recovered or cleaned up deliberately.
+handle plus the task's `box=` annotation. Use this mandatory wait protocol:
+
+1. Start `dl-box.sh` once in a persistent execution session.
+2. If the tool reports `process running`, `session ID`, or an equivalent early
+   yield, wait/poll that exact session again. In Codex, use empty-input
+   `write_stdin`; do not start another command.
+3. Repeat step 2 through quiet/no-output intervals until the session reports a
+   real exit code. A yielded call has no exit code and is never a failure.
+4. On exit `0`, capture the handle and continue. On a nonzero exit, follow the
+   exit-code contract. Only if the session itself is lost, reconcile with
+   `dl-status.sh` before deciding whether to retry.
+
+Never conclude “the container is not up yet” and stop: “not up yet” means the
+current action is to keep waiting on the existing warmup session.
 
 - `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
   scratch branch `dl/<slug>` rooted at `--base <ref>`, else the task's latest
