@@ -1,12 +1,12 @@
 ---
 name: dev-loop
 description: >-
-  Run a full development loop that breaks a goal into Taskwarrior tasks and
-  executes each one inside an isolated Incus box leased via Crabbox. Claims tasks
-  so only one owner (agent or human) works any task at a time, then merges each
-  box's changes back onto a new LOCAL review branch (never pushes to a remote,
-  never auto-merges). Use when asked to "work through a goal", "split this into
-  tasks and do them", parallelize work across agents, or run changes in a
+  Run a development pass that uses dev-loop-task to break a goal into durable
+  Taskwarrior tasks when needed, then claims and executes each one inside an
+  isolated Incus box leased via Crabbox. Ensures one owner per task and merges
+  each box's changes onto a new LOCAL review branch without pushing or
+  auto-merging. Use when asked to "work through a goal", "split this into tasks
+  and do them", parallelize work across agents, or run changes in a
   sandboxed/throwaway environment with Taskwarrior + Crabbox + Incus.
 ---
 
@@ -16,6 +16,22 @@ Orchestrate a goal end-to-end: **decompose → claim → work in an isolated box
 merge back to a local review branch → done.** Taskwarrior is the task store and
 the lock; Crabbox (Incus provider) is the isolated execution box; the per-task
 git worktree is snapshotted into a new local branch for review.
+
+## Load the task-creation component when needed
+
+Before creating any task for a fresh goal, locate and read
+`dev-loop-task/SKILL.md` completely. When the skills are stored as siblings,
+resolve it as `../dev-loop-task`; otherwise locate its installed directory. Use
+its bundled `dlt-create.sh` for every new task. Do not reconstruct task creation
+with `task add` / `+LATEST`. A pass that only consumes an already-decomposed
+project does not need to load this component.
+
+`dev-loop-task` owns task sizing, acceptance, dependency/input wiring, duplicate
+detection, and atomic UUID capture. Its stop-before-execution boundary applies
+while creating tasks. Because this skill is invoked for implementation, resume
+here with the returned UUIDs and continue to claiming only after task creation
+has finished. If creation is needed and the component is unavailable, stop with
+an environment blocker instead of copying its workflow by hand.
 
 ## Operating rules (do not violate)
 
@@ -59,14 +75,15 @@ git worktree is snapshotted into a new local branch for review.
 - **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
   precondition/usage · `30` merge-back empty/conflict/branch-collision.
 
-The helper scripts are bundled with the installed dev-loop skill, not with the
-target repo. In command examples, `/path/to/dev-loop-skill` means the installed
-skill directory containing this `SKILL.md`; invoke scripts from there while
-keeping the target repo checkout as the current working directory. Do not assume
-the target repo contains `scripts/dl-*.sh`. The scripts are idempotent and
-re-runnable where that is safe; merge-back exact re-runs of the same branch are
-no-ops, while branch-name collisions still return exit `30`. Pass `--dry-run` to
-any mutating script to preview. Full recipes,
+The implementation helper scripts are bundled with the installed dev-loop
+skill, not with the target repo; task creation's `dlt-create.sh` belongs to the
+installed dev-loop-task skill. In command examples, `/path/to/dev-loop-skill`
+means the installed directory containing this `SKILL.md`; invoke scripts from
+there while keeping the target repo checkout as the current working directory.
+Do not assume the target repo contains `scripts/dl-*.sh`. The scripts are
+idempotent and re-runnable where that is safe; merge-back exact re-runs of the
+same branch are no-ops, while branch-name collisions still return exit `30`.
+Pass `--dry-run` to any mutating script to preview. Full recipes,
 the env-var table, the exit-code table, and troubleshooting are in
 **reference.md** — read it when a step fails or when you need exact flags.
 
@@ -96,74 +113,27 @@ export DEV_LOOP_OWNER="$USER@$(hostname -s)/agent-unique-name"
 
 ## Phase 1 — Goal → tasks
 
-Decompose the goal into discrete tasks under one project slug. Encode ordering
-with dependencies and acceptance criteria as annotations:
+First inspect Taskwarrior for an existing project/task set that already captures
+the goal. Resume it when present; never decompose the same goal twice.
+
+For a fresh goal, follow dev-loop-task completely and create every task through
+its atomic helper. Capture each returned UUID. For example:
 
 ```sh
-task add project:<goal-slug> "implement X"
-task add project:<goal-slug> "test X" depends:<uuid-of-implement-X>
-task <uuid> annotate "acceptance: <how we know it's done>"
-task project:<goal-slug> export | jq -r '.[] | "\(.uuid[0:8])  \(.description)"'
+/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
+  --project <goal-slug> \
+  --description "implement X" \
+  --acceptance "<observable proof that X is done>"
 ```
 
-Keep tasks small enough that one fits in one box and one review branch — but no
-smaller. Every task pays the same fixed overhead (claim, box warmup, sync,
-merge-back, review), so **batch trivial fixes**: several small related changes
-(typo-level, doc-only, or single-file tweaks touching disjoint files) should be
-one task with one box and one review branch, not one task each. Split only when
-the pieces need different bases, different reviewers, or genuinely independent
-accept/reject decisions. Keep annotations proportional to the task: a trivial
-task needs one short `acceptance:` line, not a paragraph of scope prose.
+Use `--depends` plus `--input` for consumers, chain overlapping work, and put an
+end-to-end acceptance criterion on every chain tip as dev-loop-task requires.
+When a controller such as dev-loop-complete supplies extra metadata, pass it to
+the same creation call so the task is complete at import time.
 
-**Wire each task to its inputs explicitly.** A downstream task usually needs the
-*output* of an upstream one — the `review/<producer-slug>` branch the producer
-merges back. Encode that link at decomposition time, in two parts, so a
-resumed/crashed loop (which rehydrates only from Taskwarrior) can reconstruct it:
-
-```sh
-task <downstream> modify depends:<producer>                     # ordering + +READY gating
-task <downstream> annotate "input: review/<producer-slug>"      # WHICH branch to build on
-```
-
-`depends:` keeps the downstream task out of `+READY` until the producer is done;
-the `input:` annotation names the concrete branch to start from (its slug is
-`dl-<producer-short>-<desc>`; the producer records the exact name as `branch=`
-once it merges back, and `dl-status.sh`'s "Review branches" section reverse-maps
-it). `dl-box.sh` reads the latest `input:` annotation automatically on the first
-warm and records the resolved commit as `base=`; use `dl-box.sh --base <ref>` only
-when you intentionally need to override that input.
-
-**Stack fix tasks that touch the same files; don't branch siblings off one
-base.** When decomposing findings into fix tasks (e.g. from a review pass),
-check which files each fix will touch. If two or more fix tasks will edit the
-same file, root them on the same base only if they truly touch disjoint lines
-— otherwise chain them: each later task's `input:` names the earlier task's
-`review/<slug>` branch, plus `depends:<earlier-uuid>`, so it edits on top of the
-prior fix rather than in parallel with it. Sibling branches that each edit the
-same lines from a shared base are guaranteed to conflict for every branch after
-the first to merge — the conflict is discovered late (at `dlr-merge.sh`/review
-time) instead of avoided at decomposition time:
-
-```sh
-task <later-fix> modify depends:<earlier-fix>
-task <later-fix> annotate "input: review/<earlier-fix-slug>"
-```
-
-**Stacked chains need an integration acceptance criterion on the final task.**
-When a sequence of tasks each build on the previous one's branch (`input:`
-chains to the prior task's `review/<slug>`), passing each task's own acceptance
-criterion only proves that increment in isolation — it does not prove the
-increments actually wire together. Give the *final* task in such a chain an
-additional acceptance criterion that asserts the assembled system works
-end-to-end, not just that its own slice works, e.g.:
-
-```sh
-task <final-in-chain> annotate "acceptance: end-to-end — <the whole chain's behavior, exercised together, e.g. request flows from A through B to C and produces the expected result>"
-```
-
-Without this, integration gaps between increments (a piece built but never
-called, output produced but never consumed) can hide behind a string of
-individually-passing tasks.
+List the resulting project and verify all tasks are pending and unassigned.
+Then continue to Phase 2; the direct dev-loop-task stopping rule does not end
+this broader, explicitly authorized implementation pass.
 
 ## Phase 2 — Claim (the lock)
 

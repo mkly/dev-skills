@@ -1,11 +1,11 @@
 ---
 name: dev-loop-complete
 description: >-
-  Drive a development goal to completion by composing dev-loop,
-  dev-loop-review, and dev-ask in bounded implementation/review rounds. Use
-  when asked to "loop until done," to run dev-loop then dev-loop-review
-  repeatedly, or to take a goal all the way through Taskwarrior decomposition
-  and claims, isolated implementation, local review and merge, and any
+  Drive a development goal to completion by composing dev-loop-task, dev-loop,
+  dev-loop-review, and dev-ask in bounded implementation/review rounds. Use when
+  asked to "loop until done," to run implementation and review repeatedly, or
+  to take a goal all the way through atomic Taskwarrior task creation and
+  claims, isolated implementation, local review and merge, and any
   review-generated fix tasks until the project is clean. Stop after five rounds
   by default.
 ---
@@ -13,28 +13,33 @@ description: >-
 # Dev Loop Complete
 
 Run the implementation and review skills as one bounded controller:
-**plan work -> claim and implement -> review and merge -> turn findings into
-work -> repeat until clean.**
+**create durable work -> claim and implement -> review and merge -> turn
+findings into durable work -> repeat until clean.**
 
 ## Load the component skills
 
-Before acting, locate and read these three `SKILL.md` files completely:
+Before acting, locate and read these four `SKILL.md` files completely:
 
-1. `dev-loop` — create, claim, implement, test, merge back, and complete tasks.
-2. `dev-loop-review` — inspect review branches, merge clean work, and create fix
-   tasks for findings.
-3. `dev-ask` — stop cleanly on environment, harness, or tooling failures.
+1. `dev-loop-task` — atomically create complete pending tasks and stop before
+   execution.
+2. `dev-loop` — claim, implement, test, merge back, and complete tasks.
+3. `dev-loop-review` — inspect review branches, merge clean work, and create fix
+   tasks through dev-loop-task for findings.
+4. `dev-ask` — stop cleanly on environment, harness, or tooling failures.
 
 When this skill is stored beside its dependencies, resolve them as
-`../dev-loop`, `../dev-loop-review`, and `../dev-ask`. Otherwise locate their
-installed skill directories. Run each component's bundled scripts from that
-component's directory while keeping the target repository as the working
-directory. Never substitute similarly named scripts from the target repository.
+`../dev-loop-task`, `../dev-loop`, `../dev-loop-review`, and `../dev-ask`.
+Otherwise locate their installed skill directories. Run each component's
+bundled scripts from that component's directory while keeping the target
+repository as the working directory. Never substitute similarly named scripts
+from the target repository.
 
-Tell the user that `dev-loop` will run before `dev-loop-review`, with `dev-ask`
-guarding environment failures throughout. All of their operating and safety
-rules remain in force. This skill only adds project scoping, repetition,
-durable round tracking, and a completion rule.
+Tell the user that a fresh goal will be queued through `dev-loop-task`, then
+`dev-loop` will run before `dev-loop-review`, with `dev-ask` guarding
+environment failures throughout. All component operating and safety rules
+remain in force. The task skill's stop-before-execution boundary ends after it
+returns its UUIDs to this explicitly end-to-end controller. This skill only
+adds project scoping, repetition, durable round tracking, and a completion rule.
 
 At the phase boundary, let `dev-loop-review` govern review-branch disposition.
 Dev-loop's ban on auto-merging applies during implementation and merge-back;
@@ -59,21 +64,29 @@ completes normally; new fixes found there would require another round, so
 preserve them and stop at the cap.
 
 Choose one unused Taskwarrior project slug for the goal and use it throughout.
-Never claim or review unrelated work. Add this durable annotation to every
-initial task:
+Never claim or review unrelated work. Include this durable annotation in every
+initial task's atomic creation:
 
 ```text
 loop-round: 1
 ```
 
-After each review, annotate every newly created fix task with
-`loop-round: <next-round>`. Keep these annotations when stopping at the cap so
-a resumed run cannot accidentally reset the counter. To resume, reconstruct
-the round from the project's pending and completed task annotations plus its
-existing review branches; do not decompose the original goal again. Treat a
-pending task with `review-of:` but no `loop-round:` as an interrupted
-post-review handoff: annotate it for the next round instead of creating a
-duplicate.
+After each review, include `loop-round: <next-round>` in every fix task's
+atomic creation. Keep these annotations when stopping at the cap so a resumed
+run cannot accidentally reset the counter. To resume, reconstruct the round
+from the project's pending and completed task annotations plus its existing
+review branches; do not decompose the original goal again. Treat a pending task
+with `review-of:` but no `loop-round:` as an interrupted legacy/post-review
+handoff: annotate it for the next round instead of creating a duplicate.
+
+A project intentionally queued earlier through standalone dev-loop-task may
+have pending tasks but no round annotations yet. If the project has no
+`loop-round:` annotation on any task and no review branch, adopt those pending
+tasks as round 1 by annotating them once; do not recreate them. If some durable
+round state already exists, a pending task without `loop-round:` is an
+out-of-band addition: infer its round only when its `review-of:`/`input:` and
+project history make that unambiguous, otherwise stop and report the task that
+needs a round assignment.
 
 ## Start or resume the goal
 
@@ -87,10 +100,11 @@ duplicate.
    exists; create no duplicate tasks or branches.
 4. Run dev-loop setup once and establish one stable, unique `DEV_LOOP_OWNER`
    for the entire run.
-5. On a fresh goal only, decompose it with dev-loop Phase 1. Add acceptance
-   annotations, dependencies, and `input:` branch links. Batch trivial related
-   work and add an end-to-end acceptance criterion to the final task of every
-   stacked chain. Annotate every created task with `loop-round: 1`.
+5. On a fresh goal only, decompose it with dev-loop-task. Create every task via
+   `dlt-create.sh`, passing `--loop-round 1` so round metadata is part of the
+   same atomic import as acceptance, dependencies, and `input:` links. Batch
+   trivial related work and add an end-to-end acceptance criterion to the final
+   task of every stacked chain.
 
 Do not treat a Taskwarrior task being `done` as goal completion. In dev-loop,
 that only means its local review branch is ready; the work has not necessarily
@@ -128,16 +142,18 @@ the project slug:
 - run checks through `dlr-test.sh` when the verdict needs execution;
 - merge and safely delete clean branches with `dlr-merge.sh`;
 - leave branches with findings unmerged and create properly based, dependent
-  fix tasks as dev-loop-review requires.
+  fix tasks through dev-loop-task as dev-loop-review requires, passing
+  `--loop-round <current-round + 1>` in each atomic creation call.
 
 Treat inability to demonstrate the original goal-level outcome as a finding.
 Create an integration or verification task instead of declaring success.
 
 Compare pending task UUIDs after review with the snapshot. Ensure every new fix
 task stays in the same project, has `acceptance:`, `input:`, and `review-of:`
-annotations, and add `loop-round: <current-round + 1>`. Do not add the round
-annotation to completed producer tasks; dev-loop-review's restriction on
-mutating them still applies.
+annotations plus `loop-round: <current-round + 1>`. If a newly created task is
+missing any of them, treat creation as incomplete and repair it before the next
+round. Do not add the round annotation to completed producer tasks;
+dev-loop-review's restriction on mutating them still applies.
 
 Collect the project branches again after review actions. A clean successor can
 make its previously superseded ancestor branches become merged during the same

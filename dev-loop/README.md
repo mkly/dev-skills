@@ -1,8 +1,9 @@
 # dev-loop
 
-A repo-agnostic Claude Code / Agent skill that runs a full development loop:
+A repo-agnostic Claude Code / Agent skill that composes `dev-loop-task` with an
+isolated implementation pass:
 
-> **decompose a goal into Taskwarrior tasks → claim a task (so only one owner
+> **atomically create durable Taskwarrior tasks → claim a task (so only one owner
 > ever works it) → work in a per-task git worktree, building/testing inside an
 > isolated Incus box leased via Crabbox → snapshot the worktree onto a new
 > *local* review branch.**
@@ -10,10 +11,10 @@ A repo-agnostic Claude Code / Agent skill that runs a full development loop:
 It never pushes to a remote and never auto-merges. The review branch is left for
 a human/agent to inspect and merge deliberately.
 
-`SKILL.md` is the agent-facing entry point (the workflow); `reference.md` has the
-exact recipes, environment-variable table, exit-code contract, and
-troubleshooting. The work is done by small, idempotent, shellcheck-clean scripts
-in `scripts/`.
+`dev-loop-task/SKILL.md` owns task creation; this skill consumes those pending
+tasks. `SKILL.md` is the agent-facing implementation workflow; `reference.md`
+has exact recipes, environment variables, exit codes, and troubleshooting. The
+work is done by small, idempotent, shellcheck-clean scripts in `scripts/`.
 
 ## Prerequisites
 
@@ -33,22 +34,24 @@ gates on `crabbox doctor -provider incus` and tells you what is missing.
 
 ## Install
 
-The skill is just this directory. Symlink (recommended — edits stay live) or copy
-it into your Claude skills dir:
+Install both sibling skill directories. Symlink them (recommended — edits stay
+live) or copy them into your Claude skills dir:
 
 ```sh
 # Symlink (preferred):
 ln -s "$PWD/dev-loop" ~/.claude/skills/dev-loop
+ln -s "$PWD/dev-loop-task" ~/.claude/skills/dev-loop-task
 
 # …or copy:
 cp -r dev-loop ~/.claude/skills/dev-loop
+cp -r dev-loop-task ~/.claude/skills/dev-loop-task
 ```
 
 Claude Code discovers skills under `~/.claude/skills/` by their `SKILL.md`
 frontmatter; no further registration is needed. To make it available in one
 repo only, symlink into that repo's `.claude/skills/` instead.
 
-The scripts resolve their own location, so they work via a symlink and can also
+The scripts resolve their own locations, so they work via symlinks and can also
 be run directly from any repo checkout:
 
 ```sh
@@ -61,10 +64,12 @@ Run from inside the target repo (the checkout you want changes against):
 
 ```sh
 S=~/.claude/skills/dev-loop/scripts
+T=~/.claude/skills/dev-loop-task/scripts
 
 $S/dl-setup.sh                                   # Phase 0: one-time, idempotent
-task add project:demo "make the thing"           # Phase 1: decompose the goal
-uuid="$($S/dl-claim.sh)"                          # Phase 2: claim (the lock)
+uuid="$($T/dlt-create.sh --project demo --description 'make the thing' \
+  --acceptance 'the thing works as requested')"  # Phase 1: create only
+uuid="$($S/dl-claim.sh "$uuid")"                 # Phase 2: claim (the lock)
 $S/dl-box.sh "$uuid"                              # Phase 3: warm an Incus box
 $S/dl-run.sh "$uuid" -- bash -lc 'make && make test'
 branch="$($S/dl-merge-back.sh "$uuid")"           # Phase 4: → new local branch

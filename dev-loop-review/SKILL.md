@@ -4,11 +4,11 @@ description: >-
   Review the local review/* branches a dev-loop run produced, then act on the
   verdict. Enumerates the available review branches (git is ground truth),
   correlates each with the Taskwarrior task that produced it, walks the diffs,
-  and then either creates fix tasks (dev-loop conventions, ready for the next
-  loop) for branches with findings, or merges clean branches into the current
-  branch and deletes them. Use after running dev-loop, or when asked to
-  "review what the loop did", "review the review branches", or "review and
-  merge the dev-loop work".
+  and then either creates fix tasks atomically through dev-loop-task for
+  branches with findings, or merges clean branches into the current branch and
+  deletes them. Use after running dev-loop, or when asked to "review what the
+  loop did", "review the review branches", or "review and merge the dev-loop
+  work".
 ---
 
 # dev-loop-review
@@ -22,6 +22,17 @@ Findings become new Taskwarrior fix tasks for the next dev-loop run; a clean
 branch is merged into the current branch and deleted. No report file is saved —
 the review lives in the created tasks and the inline summary.
 
+## Load the task-creation component for findings
+
+Before creating the first finding task, locate and read
+`dev-loop-task/SKILL.md` completely. When the skills are siblings, resolve it as
+`../dev-loop-task`; otherwise locate its installed directory. Use its
+`dlt-create.sh` for every finding task so UUID capture and task metadata remain
+atomic. Never recreate the old `task add` then `task +LATEST` sequence. A pass
+with only clean verdicts need not load it. If the component is unavailable,
+clean branches may still be reviewed, but stop with an environment blocker
+before attempting to record any finding that requires a task.
+
 ## Operating rules (do not violate)
 
 - **Branches are the work queue.** Collect from `refs/heads/review/*` (plus any
@@ -29,9 +40,10 @@ the review lives in the created tasks and the inline summary.
   scanning tasks for what "should" exist. But **review against intent**: judge
   each branch's diff against its producing task's `description`, `acceptance:`,
   and `summary:` (in the collected object), not just generic taste.
-- **Findings become tasks, not a report.** Create Taskwarrior tasks using the
-  same conventions dev-loop consumes (`project:`, `acceptance:` annotation,
-  `input:` annotation naming the review branch). Do not write a review file.
+- **Findings become tasks, not a report.** Create Taskwarrior tasks through
+  dev-loop-task using the conventions dev-loop consumes (`project:`,
+  `acceptance:`, and `input:` naming the review branch). Do not write a review
+  file.
 - **A branch with findings is never merged.** It stays in place — it is the
   `input:` base its fix task will build on.
 - **A clean branch is merged and deleted.** Use `dlr-merge.sh` — it merges into
@@ -55,10 +67,11 @@ the review lives in the created tasks and the inline summary.
 - **Branch on exit codes, not prose:** `0` ok · `20` precondition/usage · `30`
   missing-artifact or merge-conflict.
 
-All scripts live in `scripts/` next to this file, source `dlr-common.sh`, and
-are re-runnable. Run them from inside the target repo checkout. The exit-code
-table and troubleshooting are in **reference.md** — read it when a step fails
-or you need exact flags.
+The review scripts live in `scripts/` next to this file, source
+`dlr-common.sh`, and are re-runnable. Task creation's `dlt-create.sh` lives in
+the dev-loop-task skill. Run review scripts from inside the target repo
+checkout. The exit-code table and troubleshooting are in **reference.md** —
+read it when a step fails or you need exact flags.
 
 ## Phase 1 — Collect the available review branches
 
@@ -145,30 +158,36 @@ looks clean.
 
 ## Phase 3 — Act on each verdict
 
-### needs-fixes → create fix tasks (dev-loop Phase 1 conventions)
+### needs-fixes → create fix tasks with dev-loop-task
 
-One task per independent finding, small enough for one box and one review
-branch, filed under the producing task's project and wired to build on the
-reviewed branch:
+Create one task per independent finding, small enough for one box and one review
+branch. File it under the producing task's project and atomically wire it to
+build on the reviewed branch:
 
 ```sh
-task add project:"$(jq -r .task.project <<<"$obj")" "fix: <one concrete finding>"
-fix="$(task +LATEST uuids)"
-task "$fix" annotate "acceptance: <how we know the finding is fixed>"
-task "$fix" annotate "input: $branch"                      # build ON the review branch
-task "$fix" annotate "review-of: <task.short> $branch"     # link back to the reviewed task
+project="$(printf '%s' "$obj" | jq -r .task.project)"
+producer="$(printf '%s' "$obj" | jq -r .task.short)"
+fix="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
+  --project "$project" \
+  --description "fix: <one concrete finding>" \
+  --acceptance "<how we know the finding is fixed>" \
+  --input "$branch" \
+  --review-of "$producer $branch")"
 ```
 
 - `input:` is the annotation dev-loop's `dl-box.sh` reads to root the fix
   task's worktree at the review branch — the fix lands as a new increment on
   top of the reviewed work.
+- `review-of:` is imported in the same operation, so a completed helper call
+  always leaves a fully traceable task and returns that exact task's UUID.
 - Use `depends:` between fix tasks when one must land before another. In
   particular, if two findings touch the same file, don't file both with
   `input: $branch` (the same original review branch) — chain them: the later
-  fix task's `input:` should name the earlier fix task's own review branch
-  (`review/<earlier-fix-slug>`) instead, plus `depends:<earlier-fix-uuid>`.
-  Siblings rooted on the same branch that edit the same lines are guaranteed to
-  conflict for every branch after the first one merges.
+  creation call should use `--depends <earlier-fix-uuid>` and `--input
+  <earlier-fix-review-branch>`. Request `--json` when creating the earlier fix
+  to capture both values without reconstructing its slug. Siblings rooted on
+  the same branch that edit the same lines are guaranteed to conflict for every
+  branch after the first one merges.
 - **Leave the branch alone** — do not merge or delete it; the fix task owns it
   now (the next `dlr-collect.sh` run will show it as `superseded`).
 
@@ -201,7 +220,8 @@ End with a short inline summary — no file:
 
 Plus 2–4 lines of cross-cutting observations (duplicated work, inconsistent
 patterns, gaps) and, if fix tasks were created, note that another dev-loop run
-(`dev-loop` skill, Phases 2–5) will pick them up.
+(`dev-loop` skill, Phases 2–5) will pick them up. State that finding tasks were
+left pending and unclaimed.
 
 Defer to `task <uuid> info` for anything not in the collected object, and to
 dev-loop's own reference for how the annotations got there.

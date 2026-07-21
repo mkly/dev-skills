@@ -9,6 +9,10 @@ there while keeping the target repo checkout as the current working directory.
 The scripts source `dl-common.sh`, use `set -euo pipefail`, send diagnostics to
 stderr, and accept `--dry-run` on mutating operations.
 
+Task creation belongs to the sibling `dev-loop-task` skill. Its
+`dlt-create.sh` atomically imports a complete pending task with a pre-generated
+UUID. Do not replace it with `task add` followed by `task +LATEST`.
+
 ## Exit-code contract
 
 Every script uses this set so callers branch on the code, not on prose:
@@ -59,6 +63,20 @@ no effect until the next warmup.
 | `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease/worktree reconciliation. Mutates nothing. |
 
 ## Recipes
+
+### Create a task (delegated to dev-loop-task)
+
+```sh
+uuid="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
+  --project <goal-slug> --description "implement X" \
+  --acceptance "<observable proof that X is done>")"
+```
+
+The helper returns the exact UUID on stdout and leaves the task pending,
+unstarted, and unassigned. Use its `--json` result when a downstream task needs
+the producer's predicted review branch, then pass both `--depends <uuid>` and
+`--input <review-branch>` to the downstream creation call. Read the
+dev-loop-task skill for sizing, duplicate detection, and stacked-chain rules.
 
 ### Claim — the lock (flock + compare-and-swap)
 
@@ -240,17 +258,14 @@ lifecycle notes. A crashed/resumed loop reconstructs context from these — and
 because the `worktree=` path is durable, a resumed loop re-enters the same
 isolated tree (or `dl-box.sh` recreates it if it was pruned).
 
-Annotations are also where a task's **inputs** are wired at decomposition time. A
-downstream task usually builds on an upstream one's *output* — the
-`review/<producer-slug>` branch the producer merges back. Record that link in two
-parts so a resumed loop (which rehydrates only from Taskwarrior) can reconstruct
-it: `task <downstream> modify depends:<producer>` keeps it out of `+READY` until
-the producer is done, and `task <downstream> annotate "input: review/<producer-slug>"`
-names the concrete branch to start from. `dl-box.sh` reads that annotation
-automatically on the first warm and records the resolved commit as `base=`; pass
-`--base <ref>` only for an intentional override. The producer records the exact
-branch name as `branch=` once it merges back, and `dl-status.sh`'s "Review
-branches" section reverse-maps it.
+Annotations are also where a task's **inputs** are wired at creation time. The
+dev-loop-task helper records the two-part link for a consumer: `--depends
+<producer>` keeps it out of `+READY`, while `--input
+review/<producer-slug>` names the concrete branch on which to build. `dl-box.sh`
+reads that annotation automatically on the first warm and records the resolved
+commit as `base=`; pass `--base <ref>` only for an intentional override. The
+producer records the exact branch name as `branch=` once it merges back, and
+`dl-status.sh`'s "Review branches" section reverse-maps it.
 
 Annotations are also the place for **human-readable task notes**: a `summary:`
 annotation (added before `dl-done.sh`) captures what was done and why. Because

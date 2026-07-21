@@ -10,6 +10,10 @@ task's intent, and then either files fix tasks (findings) or merges the branch
 into the current branch and deletes it (clean). It never pushes to a remote and
 never writes a report file.
 
+Finding-task creation is delegated to the sibling `dev-loop-task` skill. Its
+`dlt-create.sh` imports the complete pending task with a pre-generated UUID in
+one Taskwarrior operation; do not use `task add` followed by `task +LATEST`.
+
 ## How it relates to dev-loop
 
 dev-loop, when it finishes a task, leaves one local review branch and a durable
@@ -21,7 +25,7 @@ trail on the producing Taskwarrior task via annotations:
 | `branch=<name>`     | `key=value` | `dl-merge-back.sh` | the local review branch created            |
 | `commits=<r> (n=N)` | `key=value` | `dl-merge-back.sh` | `<base12>..<head12>` range + commit count  |
 | `summary: …`        | `prefix:`   | agent (Phase 5)    | human note: what changed and why           |
-| `acceptance: …`     | `prefix:`   | agent (Phase 1)    | how the task is judged done                |
+| `acceptance: …`     | `prefix:`   | dev-loop-task      | how the task is judged done                |
 
 `key=value` annotations are read **last-wins**; `prefix:` notes are **all
 collected**. This skill reads that trail to find each branch's producing task —
@@ -33,9 +37,9 @@ This skill in turn writes annotations dev-loop consumes:
 
 | annotation                    | written by            | consumed by                                  |
 |-------------------------------|-----------------------|----------------------------------------------|
-| `acceptance: …` (on fix task) | agent (Phase 3)       | the next dev-loop run / this skill next time |
-| `input: <branch>` (on fix task) | agent (Phase 3)     | `dl-box.sh` — roots the fix worktree at the reviewed branch |
-| `review-of: <short> <branch>` (on fix task) | agent (Phase 3) | humans tracing a fix back to its review |
+| `acceptance: …` (on fix task) | `dlt-create.sh` (Phase 3) | the next dev-loop run / this skill next time |
+| `input: <branch>` (on fix task) | `dlt-create.sh` (Phase 3) | `dl-box.sh` — roots the fix worktree at the reviewed branch |
+| `review-of: <short> <branch>` (on fix task) | `dlt-create.sh` (Phase 3) | humans tracing a fix back to its review |
 | `dev-loop-review: merged …` (on producer) | `dlr-merge.sh` | audit trail of what landed where          |
 
 ## Exit codes
@@ -158,16 +162,17 @@ for b in $(printf '%s' "$branches" | jq -r '.[] | select((.merged or .superseded
   scripts/dlr-diff.sh "$b"        # review each; verdict: clean | needs-fixes
 done
 # clean → scripts/dlr-merge.sh "$b"
-# needs-fixes → task add … (see SKILL.md Phase 3)
+# needs-fixes → dlt-create.sh … (see SKILL.md Phase 3)
 ```
 
 **File a fix task for a finding (dev-loop conventions):**
 ```sh
-task add project:"$slug" "fix: <one concrete finding>"
-fix="$(task +LATEST uuids)"
-task "$fix" annotate "acceptance: <how we know it's fixed>"
-task "$fix" annotate "input: $branch"
-task "$fix" annotate "review-of: <producer-short> $branch"
+fix="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
+  --project "$slug" \
+  --description "fix: <one concrete finding>" \
+  --acceptance "<how we know it's fixed>" \
+  --input "$branch" \
+  --review-of "<producer-short> $branch")"
 ```
 
 **Clean up branches that already landed:**
