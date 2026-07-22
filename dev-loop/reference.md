@@ -77,6 +77,9 @@ unstarted, and unassigned. Use its `--json` result when a downstream task needs
 the producer's predicted review branch, then pass both `--depends <uuid>` and
 `--input <review-branch>` to the downstream creation call. Read the
 dev-loop-task skill for sizing, duplicate detection, and stacked-chain rules.
+After the last task in the batch has been created, run
+`task rc.confirmation=no sync` once more before claiming any UUID; tolerate only
+the unconfigured-sync result described by dev-loop-task.
 
 ### Claim — the lock (flock + verified owner write)
 

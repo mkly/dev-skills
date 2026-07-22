@@ -104,7 +104,9 @@ needs a round assignment.
    `dlt-create.sh`, passing `--loop-round 1` so round metadata is part of the
    same atomic import as acceptance, dependencies, and `input:` links. Batch
    trivial related work and add an end-to-end acceptance criterion to the final
-   task of every stacked chain.
+   task of every stacked chain. End this task-creation phase with
+   dev-loop-task's required final `task rc.confirmation=no sync`; do not start
+   the round until that sync succeeds or reports that sync is unconfigured.
 
 Do not treat a Taskwarrior task being `done` as goal completion. In dev-loop,
 that only means its local review branch is ready; the work has not necessarily
@@ -144,6 +146,11 @@ the project slug:
 - leave branches with findings unmerged and create properly based, dependent
   fix tasks through dev-loop-task as dev-loop-review requires, passing
   `--loop-round <current-round + 1>` in each atomic creation call.
+
+Do not reconcile or start the next round until dev-loop-review has completed
+dev-loop-task's required final `task rc.confirmation=no sync` for the complete
+fix-task batch. This is the component's batch-final sync, not an additional
+controller sync; a pre-import sync from the last creation does not replace it.
 
 Treat inability to demonstrate the original goal-level outcome as a finding.
 Create an integration or verification task instead of declaring success.

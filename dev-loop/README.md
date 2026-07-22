@@ -69,6 +69,7 @@ T=~/.claude/skills/dev-loop-task/scripts
 $S/dl-setup.sh                                   # Phase 0: one-time, idempotent
 uuid="$($T/dlt-create.sh --project demo --description 'make the thing' \
   --acceptance 'the thing works as requested')"  # Phase 1: create only
+task rc.confirmation=no sync                      # Phase 1: publish completed batch
 uuid="$($S/dl-claim.sh "$uuid")"                 # Phase 2: claim (the lock)
 $S/dl-box.sh "$uuid"                              # Phase 3: warm an Incus box
 $S/dl-run.sh "$uuid" -- bash -lc 'make && make test'

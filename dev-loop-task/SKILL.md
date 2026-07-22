@@ -27,6 +27,9 @@ acceptance without relying on conversation history.
   task UUIDs and stop. When loaded by another dev-loop skill, return the UUIDs
   to that controller; the caller decides whether its broader authorization
   permits claiming or continuing.
+- **Sync the completed batch.** After the last task has been created, run the
+  final sync in Phase 4 before reporting or returning UUIDs to a controller.
+  A caller must preserve this boundary before it starts claiming work.
 - **Do not add LLM/agent attribution** to descriptions or annotations.
 - **Keep stdout parseable.** The bundled helper prints only the exact created
   UUID by default. Diagnostics go to stderr.
@@ -40,7 +43,8 @@ dev-loop setup, Crabbox, or Incus.
 
 Run `task rc.confirmation=no sync` before inspecting or creating tasks. Continue
 when it succeeds or reports `No sync.* settings are configured`; the latter
-means there is simply nothing to sync. Stop on any other sync failure.
+means there is simply nothing to sync. Stop on any other sync failure. Apply
+these same outcome rules to the final sync in Phase 4.
 `dlt-create.sh` repeats this check immediately before each real import and skips
 it for `--dry-run`.
 
@@ -142,7 +146,18 @@ an existing task. Add `--json` to distinguish it via `"created": false`.
 
 ## 4. Verify and report
 
-After creation, inspect each returned UUID:
+After every task in the planned batch has been created, run one final sync:
+
+```sh
+task rc.confirmation=no sync
+```
+
+This pushes the last creation as well as any earlier creations not already
+propagated. The helper's pre-import sync is not a substitute for this batch-final
+sync. If the final sync fails for any reason other than unconfigured sync, stop
+without reporting the batch as successfully handed off.
+
+Then inspect each returned UUID:
 
 ```sh
 task rc.context=none rc.json.array=on rc.verbose=nothing "$uuid" export \

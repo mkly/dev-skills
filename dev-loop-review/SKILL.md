@@ -205,6 +205,12 @@ treat that as a finding: create a fix task
 ("rebase $branch onto <current-branch> and resolve conflicts") with
 `input: $branch`, and move on.
 
+After all review branches have been acted on and the last finding task has been
+created, run dev-loop-task's required final `task rc.confirmation=no sync` once
+for the complete finding-task batch. Do this before handing the UUIDs to another
+controller or producing the Phase 4 summary. If no finding task was created,
+there is no creation batch to sync here.
+
 ## Phase 4 — Summarize inline
 
 End with a short inline summary — no file:

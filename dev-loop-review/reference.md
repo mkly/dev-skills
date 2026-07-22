@@ -13,6 +13,8 @@ never writes a report file.
 Finding-task creation is delegated to the sibling `dev-loop-task` skill. Its
 `dlt-create.sh` imports the complete pending task with a pre-generated UUID in
 one Taskwarrior operation; do not use `task add` followed by `task +LATEST`.
+After the complete finding-task batch is created, run dev-loop-task's required
+final `task rc.confirmation=no sync` before handing off or reporting the UUIDs.
 
 ## How it relates to dev-loop
 

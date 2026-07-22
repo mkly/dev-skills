@@ -135,9 +135,11 @@ end-to-end acceptance criterion on every chain tip as dev-loop-task requires.
 When a controller such as dev-loop-complete supplies extra metadata, pass it to
 the same creation call so the task is complete at import time.
 
-List the resulting project and verify all tasks are pending and unassigned.
-Then continue to Phase 2; the direct dev-loop-task stopping rule does not end
-this broader, explicitly authorized implementation pass.
+After the entire batch is created, run dev-loop-task's required final
+`task rc.confirmation=no sync`. Only then list the resulting project and verify
+all tasks are pending and unassigned. Continue to Phase 2 after that boundary;
+the direct dev-loop-task stopping rule does not end this broader, explicitly
+authorized implementation pass.
 
 ## Phase 2 — Claim (the lock)
 
