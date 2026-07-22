@@ -27,11 +27,11 @@ dlt_die() { local code="$1"; shift; dlt_err "$*"; exit "$code"; }
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dlt-create.sh --project <slug> --description <text>
+Usage: dlt-create.sh --project <repo>.<goal> --description <text>
                      --acceptance <criterion> [options]
 
 Required:
-  --project <slug>          Taskwarrior project slug
+  --project <repo>.<goal>   fully qualified Taskwarrior project
   --description <text>     concise task outcome
   --acceptance <criterion> acceptance outcome; repeatable
 

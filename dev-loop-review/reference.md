@@ -66,7 +66,7 @@ diagnostics to **stderr** and its machine-parseable payload to **stdout**.
 repo/tasks; `dlr-test.sh` mutates nothing in the repo/Taskwarrior but does
 create/reuse a Crabbox/Incus lease and a worktree (see below).
 
-### `dlr-collect.sh [<project-slug>]`
+### `dlr-collect.sh [<repo>.<goal>]`
 Enumerate the available local review branches. Candidate set =
 `refs/heads/review/*` ∪ every `branch=` annotation value that still resolves to
 a local branch; each is reverse-mapped to its producing task (any status).
@@ -81,8 +81,10 @@ acceptance}` or `null` (ORPHAN — no task records the branch).
   `superseded_by` is that task's short uuid (`""` otherwise).
 - `base` = the task's `base=` if it still resolves, else
   `git merge-base HEAD branch`, else `""`.
-- With a slug → only branches whose producing task is in `project:<slug>`
-  (orphans are excluded, since their project is unknown).
+- With a project → only branches whose producing task's project exactly equals
+  that fully qualified `<repo>.<goal>` value (orphans are excluded, since their
+  project is unknown). This is intentionally narrower than Taskwarrior's parent
+  hierarchy filter; pass the goal leaf, not a bare goal or repo root.
 - No branches → exit `0`, body `[]`. Counts go to stderr.
 
 ### `dlr-diff.sh <branch> [--stat-only] [-- <git diff flags>]`
@@ -157,8 +159,8 @@ skills' worktrees never collide.
 
 **Review a whole goal end-to-end:**
 ```sh
-slug=my-goal
-branches="$(scripts/dlr-collect.sh "$slug")"
+project=my-repo.my-goal
+branches="$(scripts/dlr-collect.sh "$project")"
 printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" elif .superseded then "SUPERSEDED by \(.superseded_by)" else "+\(.ahead)" end)  \(.task.description // "ORPHAN")"'
 for b in $(printf '%s' "$branches" | jq -r '.[] | select((.merged or .superseded) | not) | .branch'); do
   scripts/dlr-diff.sh "$b"        # review each; verdict: clean | needs-fixes
@@ -170,7 +172,7 @@ done
 **File a fix task for a finding (dev-loop conventions):**
 ```sh
 fix="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project "$slug" \
+  --project "$project" \
   --description "fix: <one concrete finding>" \
   --acceptance "<how we know it's fixed>" \
   --input "$branch" \

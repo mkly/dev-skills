@@ -67,8 +67,9 @@ an environment blocker instead of copying its workflow by hand.
   fresh lease may take minutes. Run it in a persistent command session. If the
   execution tool yields a session/process ID while the command is still running,
   that means **warmup is still in progress**, not that the box is unavailable.
-  Poll/wait on that same session (in Codex, call `write_stdin` with empty input)
-  repeatedly until the command actually exits. Its initial `warming box`
+  Poll/wait on that same session using the execution environment's supported
+  session mechanism, with empty input where applicable, until the command
+  actually exits. Its initial `warming box`
   diagnostic and quiet periods are progress, not completion or failure. Do not
   invoke `dl-run.sh`, retry `dl-box.sh`, or return control to the user while that
   session is running. Proceed only after exit `0`, a printed box handle, and the
@@ -118,14 +119,19 @@ export DEV_LOOP_OWNER="$USER@$(hostname -s)/agent-unique-name"
 ## Phase 1 — Goal → tasks
 
 First inspect Taskwarrior for an existing project/task set that already captures
-the goal. Resume it when present; never decompose the same goal twice.
+the goal. Resolve the project as the fully qualified `<repo>.<goal>` hierarchy
+defined by dev-loop-task: the stable repo/project namespace first, then the goal
+slug. Resume that exact leaf when present; never decompose the same goal twice,
+and never create this work under a bare goal slug. The repo root is available
+for repo-wide Taskwarrior queries, while this pass remains scoped to the exact
+goal project.
 
 For a fresh goal, follow dev-loop-task completely and create every task through
 its atomic helper. Capture each returned UUID. For example:
 
 ```sh
 /path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project <goal-slug> \
+  --project <repo-slug>.<goal-slug> \
   --description "implement X" \
   --acceptance "<observable proof that X is done>"
 ```
@@ -144,8 +150,8 @@ authorized implementation pass.
 ## Phase 2 — Claim (the lock)
 
 ```sh
-uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh)"          # auto-pick highest-urgency READY task
-# or: uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid>)"   # claim a specific task
+uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid>)"   # goal-scoped pass: claim a verified project task
+# or: uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh)"    # explicitly unscoped queue pass only
 ```
 
 `dl-claim.sh` acquires an OS `flock` around the multi-command claim sequence,
@@ -156,6 +162,10 @@ among dev-loop agents sharing the host and `DEV_LOOP_STATE_DIR`.
 
 - **Auto-pick with nothing claimable** → exit `0`, empty stdout. Stop and report
   "no ready tasks".
+- For a named goal, enumerate tasks by exact fully qualified project and pass
+  each selected UUID explicitly. Do not let an unscoped auto-pick cross into a
+  different repo or goal. Use auto-pick only when the requested pass explicitly
+  covers the general dev-loop queue.
 - **Specific task owned by another** → exit `10`. Do not work it; choose another.
 - Re-claiming your own task is a no-op (idempotent).
 - A crashed owner's task is only reclaimable with `--steal-after <dur>` (e.g.
@@ -177,8 +187,8 @@ handle plus the task's `box=` annotation. Use this mandatory wait protocol:
 
 1. Start `dl-box.sh` once in a persistent execution session.
 2. If the tool reports `process running`, `session ID`, or an equivalent early
-   yield, wait/poll that exact session again. In Codex, use empty-input
-   `write_stdin`; do not start another command.
+   yield, wait/poll that exact session again using the execution environment's
+   supported session mechanism; do not start another command.
 3. Repeat step 2 through quiet/no-output intervals until the session reports a
    real exit code. A yielded call has no exit code and is never a failure.
 4. On exit `0`, capture the handle and continue. On a nonzero exit, follow the
@@ -294,9 +304,10 @@ reference.md, or re-survey `dl-status.sh` on every iteration when nothing has
 gone wrong. `dl-status.sh` is for reconciling after a failure or at the end of
 the loop, not a per-task ritual.
 
-When `dl-claim.sh` auto-pick returns empty, the goal's ready work is done — run
-`/path/to/dev-loop-skill/scripts/dl-status.sh` to confirm no orphan leases
-remain, then report what landed on which review branches.
+When the exact goal project's `+READY` query returns no tasks, its ready work is
+done. (For an explicitly unscoped queue pass, the equivalent boundary is an
+empty auto-pick.) Run `/path/to/dev-loop-skill/scripts/dl-status.sh` to confirm
+no orphan leases remain, then report what landed on which review branches.
 
 **After a review branch is merged,** prompt the user to delete it:
 

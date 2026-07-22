@@ -3,7 +3,7 @@
 # that produced them.
 #
 #   dlr-collect.sh                  # every available review branch
-#   dlr-collect.sh <project-slug>   # only branches produced by that project
+#   dlr-collect.sh <repo>.<goal>    # only branches produced by that exact project
 #
 # Git is ground truth: the candidate set is refs/heads/review/* plus every
 # branch= annotation value that still resolves to a local branch. Each branch
@@ -30,9 +30,9 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dlr-collect.sh [<project-slug>]
+Usage: dlr-collect.sh [<repo>.<goal>]
 
-  <project-slug>  only branches whose producing task is in this project
+  <repo>.<goal>  only branches whose producing task exactly matches this project
 
 Prints a JSON array of available review branches + producing-task context.
 Exit: 0 ok, 20 precondition/usage.

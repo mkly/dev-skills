@@ -43,7 +43,8 @@ before attempting to record any finding that requires a task.
 - **Findings become tasks, not a report.** Create Taskwarrior tasks through
   dev-loop-task using the conventions dev-loop consumes (`project:`,
   `acceptance:`, and `input:` naming the review branch). Do not write a review
-  file.
+  file. Inherit the producing task's exact fully qualified `<repo>.<goal>`
+  project; never strip its repo namespace or file the finding under a bare goal.
 - **A branch with findings is never merged.** It stays in place — it is the
   `input:` base its fix task will build on.
 - **A clean branch is merged and deleted.** Use `dlr-merge.sh` — it merges into
@@ -77,8 +78,12 @@ read it when a step fails or you need exact flags.
 
 ```sh
 scripts/dlr-collect.sh                # every available review branch
-scripts/dlr-collect.sh <goal-slug>    # only branches produced by that project
+scripts/dlr-collect.sh <repo>.<goal>  # only branches produced by that exact project
 ```
+
+The argument is the exact goal project, not the repo's parent namespace. This
+keeps a review pass isolated even though Taskwarrior's `project:<repo>` filter
+can group all descendant goals for repo-wide human queries.
 
 Emits a JSON array on stdout, one object per **existing local branch**:
 `{branch, merged, ahead, superseded, superseded_by, base, task}` where `task`
@@ -100,7 +105,7 @@ printf '%s' "$branches" | jq -r '.[] | "\(.branch)  \(if .merged then "MERGED" e
   review or merge it on its own; it lands, and becomes `merged: true`, when its
   successor's branch merges.
 - `task: null` (ORPHAN) → review it anyway against generic quality; if it needs
-  fix tasks, ask the user which project to file them under.
+  fix tasks, ask the user for the fully qualified `<repo>.<goal>` project.
 
 ## Phase 2 — Review each unmerged branch
 
@@ -161,8 +166,8 @@ looks clean.
 ### needs-fixes → create fix tasks with dev-loop-task
 
 Create one task per independent finding, small enough for one box and one review
-branch. File it under the producing task's project and atomically wire it to
-build on the reviewed branch:
+branch. File it under the producing task's exact project—including its repo
+namespace—and atomically wire it to build on the reviewed branch:
 
 ```sh
 project="$(printf '%s' "$obj" | jq -r .task.project)"

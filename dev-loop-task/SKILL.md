@@ -39,6 +39,40 @@ The helper is bundled with this skill. In examples,
 It requires `task` and `jq`, but it does not require a git repository,
 dev-loop setup, Crabbox, or Incus.
 
+## Project namespace
+
+Give every task a fully qualified, dot-delimited Taskwarrior project:
+
+```text
+<repo>.<goal>
+```
+
+- `<repo>` is the stable namespace for the target repository. Reuse a root the
+  user supplied or existing tasks already use for that repository. Otherwise
+  derive it from the repository name (prefer the primary remote's repository
+  name; fall back to the Git worktree root directory). When task creation is
+  intentionally outside Git, use the stable product/project name instead.
+- `<goal>` is a concise slug for this durable outcome. Every initial, chained,
+  and review-finding task for the same goal must carry the exact same fully
+  qualified project.
+- Normalize newly chosen segments to lowercase; replace runs outside letters,
+  digits, `_`, and `-` with `-`, then trim separators. Reserve `.` for hierarchy
+  boundaries. If the resulting repo root is ambiguous, fold a stable owner or
+  organization identifier into the repo segment (for example,
+  `acme-dev-skill`) rather than creating a colliding root.
+- Never create a task under a bare goal such as `project-namespacing` or under
+  the repo root alone. For example, use `dev-skill.project-namespacing`, so
+  Taskwarrior treats every `dev-skill.*` goal as part of the `dev-skill`
+  hierarchy while the full leaf still isolates this goal.
+- Do not rename an established namespace merely because a checkout directory
+  or remote changed. Reuse the durable Taskwarrior root unless the user is
+  explicitly migrating it.
+
+Use the parent namespace for repo-wide human queries, for example
+`task project:dev-skill list`. Use exact equality on the full leaf for duplicate
+detection, claiming, review, and controller completion checks; a parent project
+filter deliberately includes its descendants.
+
 ## 1. Establish the task set
 
 Run `task rc.confirmation=no sync` before inspecting or creating tasks. Continue
@@ -48,14 +82,16 @@ these same outcome rules to the final sync in Phase 4.
 `dlt-create.sh` repeats this check immediately before each real import and skips
 it for `--dry-run`.
 
-State the requested outcome in observable terms. Choose one existing project
-slug when the work belongs to an active goal; otherwise choose a concise unused
-slug. Inspect pending tasks before creating anything and reuse an existing task
-when it already captures the same intent and acceptance:
+State the requested outcome in observable terms. Resolve one fully qualified
+`<repo>.<goal>` project using the namespace contract above. Reuse that exact
+project when the work belongs to an active goal; otherwise choose a concise,
+unused goal segment beneath the repo root. Inspect pending tasks before creating
+anything and reuse an existing task when it already captures the same intent
+and acceptance:
 
 ```sh
 task rc.context=none rc.json.array=on rc.verbose=nothing status:pending export \
-  | jq --arg project '<goal-slug>' \
+  | jq --arg project '<repo-slug>.<goal-slug>' \
        '[.[] | select(.project == $project) | {uuid, status, start, assignee, description, depends, annotations}]'
 ```
 
@@ -75,7 +111,7 @@ review overhead.
 
 Give every task:
 
-- one project slug;
+- one fully qualified `<repo>.<goal>` project;
 - a concise outcome-oriented description;
 - at least one `acceptance: <observable proof>` annotation; and
 - dependencies and branch inputs when ordering matters.
@@ -109,7 +145,7 @@ Create a simple task:
 
 ```sh
 uuid="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project '<goal-slug>' \
+  --project '<repo-slug>.<goal-slug>' \
   --description 'implement X' \
   --acceptance 'the named behavior is observable and its focused checks pass')"
 ```
@@ -123,13 +159,13 @@ default review branch:
 
 ```sh
 producer_json="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh --json \
-  --project '<goal-slug>' --description 'implement X' \
+  --project '<repo-slug>.<goal-slug>' --description 'implement X' \
   --acceptance 'X passes its focused checks')"
 producer="$(printf '%s' "$producer_json" | jq -r .uuid)"
 producer_branch="$(printf '%s' "$producer_json" | jq -r .review_branch)"
 
 consumer="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project '<goal-slug>' --description 'integrate X with Y' \
+  --project '<repo-slug>.<goal-slug>' --description 'integrate X with Y' \
   --depends "$producer" --input "$producer_branch" \
   --acceptance 'Y consumes X successfully' \
   --acceptance 'end-to-end: the assembled X-to-Y flow produces the expected result')"
@@ -166,9 +202,9 @@ task rc.context=none rc.json.array=on rc.verbose=nothing "$uuid" export \
 
 Confirm that it is pending, has no `start` or assignee, contains every planned
 acceptance criterion, and has the intended dependencies and input branch.
-Report the project, short UUID, description, dependencies/readiness, and
-acceptance criteria. End with an explicit statement that no task was claimed or
-started.
+Report the fully qualified project, short UUID, description,
+dependencies/readiness, and acceptance criteria. End with an explicit statement
+that no task was claimed or started.
 
 The helper exits `20` for usage, missing tools, sync failures,
 ambiguous/missing dependencies, import failures, or failed verification. Treat

@@ -1,7 +1,7 @@
 # dev-loop
 
-A repo-agnostic Claude Code / Agent skill that composes `dev-loop-task` with an
-isolated implementation pass:
+A repo-agnostic agent skill that composes `dev-loop-task` with an isolated
+implementation pass:
 
 > **atomically create durable Taskwarrior tasks → claim a task (so only one owner
 > ever works it) → work in a per-task git worktree, building/testing inside an
@@ -34,28 +34,31 @@ gates on `crabbox doctor -provider incus` and tells you what is missing.
 
 ## Install
 
-Install both sibling skill directories. Symlink them (recommended — edits stay
-live) or copy them into your Claude skills dir:
+Install both sibling skill directories in a location your agent runtime scans.
+Keep them as siblings so their cross-skill references resolve. Symlink them
+(recommended — edits stay live) or copy them into that directory:
 
 ```sh
+agent_skill_root=/path/to/agent-skills
+
 # Symlink (preferred):
-ln -s "$PWD/dev-loop" ~/.claude/skills/dev-loop
-ln -s "$PWD/dev-loop-task" ~/.claude/skills/dev-loop-task
+ln -s "$PWD/dev-loop" "$agent_skill_root/dev-loop"
+ln -s "$PWD/dev-loop-task" "$agent_skill_root/dev-loop-task"
 
 # …or copy:
-cp -r dev-loop ~/.claude/skills/dev-loop
-cp -r dev-loop-task ~/.claude/skills/dev-loop-task
+cp -r dev-loop "$agent_skill_root/dev-loop"
+cp -r dev-loop-task "$agent_skill_root/dev-loop-task"
 ```
 
-Claude Code discovers skills under `~/.claude/skills/` by their `SKILL.md`
-frontmatter; no further registration is needed. To make it available in one
-repo only, symlink into that repo's `.claude/skills/` instead.
+Configure the runtime to discover each directory's `SKILL.md` frontmatter. The
+discovery path and registration mechanism are runtime-specific; the skills and
+their scripts do not depend on either one.
 
 The scripts resolve their own locations, so they work via symlinks and can also
 be run directly from any repo checkout:
 
 ```sh
-~/.claude/skills/dev-loop/scripts/dl-setup.sh
+/path/to/agent-skills/dev-loop/scripts/dl-setup.sh
 ```
 
 ## Quick start
@@ -63,20 +66,21 @@ be run directly from any repo checkout:
 Run from inside the target repo (the checkout you want changes against):
 
 ```sh
-S=~/.claude/skills/dev-loop/scripts
-T=~/.claude/skills/dev-loop-task/scripts
+dev_loop_scripts=/path/to/agent-skills/dev-loop/scripts
+dev_task_scripts=/path/to/agent-skills/dev-loop-task/scripts
 
-$S/dl-setup.sh                                   # Phase 0: one-time, idempotent
-uuid="$($T/dlt-create.sh --project demo --description 'make the thing' \
-  --acceptance 'the thing works as requested')"  # Phase 1: create only
-task rc.confirmation=no sync                      # Phase 1: publish completed batch
-uuid="$($S/dl-claim.sh "$uuid")"                 # Phase 2: claim (the lock)
-$S/dl-box.sh "$uuid"                              # Phase 3: warm an Incus box
-$S/dl-run.sh "$uuid" -- bash -lc 'make && make test'
-branch="$($S/dl-merge-back.sh "$uuid")"           # Phase 4: → new local branch
+"$dev_loop_scripts/dl-setup.sh"                                   # Phase 0: one-time, idempotent
+uuid="$("$dev_task_scripts/dlt-create.sh" \
+  --project demo.make-the-thing --description 'make the thing' \
+  --acceptance 'the thing works as requested')"                    # Phase 1: create only
+task rc.confirmation=no sync                                       # Phase 1: publish completed batch
+uuid="$("$dev_loop_scripts/dl-claim.sh" "$uuid")"                 # Phase 2: claim (the lock)
+"$dev_loop_scripts/dl-box.sh" "$uuid"                             # Phase 3: warm an Incus box
+"$dev_loop_scripts/dl-run.sh" "$uuid" -- bash -lc 'make && make test'
+branch="$("$dev_loop_scripts/dl-merge-back.sh" "$uuid")"          # Phase 4: → new local branch
 base="$(task "$uuid" export | jq -r '.[0].annotations | map(.description) | map(select(startswith("base="))) | last | .[5:]')"
-git log --oneline "$base..$branch"               # review (script also prints log/stat)
-$S/dl-done.sh "$uuid"                             # Phase 5: complete + park the box for reuse
+git log --oneline "$base..$branch"                                # review (script also prints log/stat)
+"$dev_loop_scripts/dl-done.sh" "$uuid"                            # Phase 5: complete + park the box for reuse
 ```
 
 `dl-status.sh` (read-only) reconciles claims against live leases at any time.

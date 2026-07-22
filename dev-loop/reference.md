@@ -68,15 +68,19 @@ no effect until the next warmup.
 
 ```sh
 uuid="$(/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project <goal-slug> --description "implement X" \
+  --project <repo-slug>.<goal-slug> --description "implement X" \
   --acceptance "<observable proof that X is done>")"
 ```
 
 The helper returns the exact UUID on stdout and leaves the task pending,
-unstarted, and unassigned. Use its `--json` result when a downstream task needs
-the producer's predicted review branch, then pass both `--depends <uuid>` and
-`--input <review-branch>` to the downstream creation call. Read the
-dev-loop-task skill for sizing, duplicate detection, and stacked-chain rules.
+unstarted, and unassigned. The project must be the exact dot-delimited leaf from
+dev-loop-task's namespace contract: a stable repo/project root plus the goal
+slug. All tasks for the goal reuse that full value; a repo-root Taskwarrior
+filter intentionally groups its descendant goals. Use the helper's `--json`
+result when a downstream task needs the producer's predicted review branch,
+then pass both `--depends <uuid>` and `--input <review-branch>` to the downstream
+creation call. Read the dev-loop-task skill for naming, sizing, duplicate
+detection, and stacked-chain rules.
 After the last task in the batch has been created, run
 `task rc.confirmation=no sync` once more before claiming any UUID; tolerate only
 the unconfigured-sync result described by dev-loop-task.
@@ -138,13 +142,13 @@ automatically; you do not pass the path.
 command in a persistent session until it exits; `warming box` is only a progress
 message. When an execution tool yields a still-running session/process ID, poll
 that same session until it returns an actual exit code; quiet polls are normal.
-For Codex, call `write_stdin` with empty input on the returned session ID and
-repeat as needed. Do not retry `dl-box.sh`, run another phase, tell the user the
-box is not ready, or end the turn while the warmup session remains live. Phase 3
-may proceed only after exit `0`, a handle on stdout, and a matching
-`box=<handle>` annotation on the task. If the session itself is lost before an
-exit result, run `dl-status.sh` before retrying so any partially-created lease is
-reconciled rather than leaked.
+Use the execution environment's supported session-polling mechanism, with empty
+input where applicable, and repeat as needed. Do not retry `dl-box.sh`, run
+another phase, tell the user the box is not ready, or end the turn while the
+warmup session remains live. Phase 3 may proceed only after exit `0`, a handle
+on stdout, and a matching `box=<handle>` annotation on the task. If the session
+itself is lost before an exit result, run `dl-status.sh` before retrying so any
+partially-created lease is reconciled rather than leaked.
 
 After `dl-done.sh` or `dl-release.sh`, a still-live lease is parked for this
 repository instead of being stopped. The next `dl-box.sh` atomically claims it,

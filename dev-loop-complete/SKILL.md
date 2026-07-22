@@ -63,9 +63,19 @@ review belong to the next round. A clean result in the final allowed round
 completes normally; new fixes found there would require another round, so
 preserve them and stop at the cap.
 
-Choose one unused Taskwarrior project slug for the goal and use it throughout.
-Never claim or review unrelated work. Include this durable annotation in every
-initial task's atomic creation:
+Choose one fully qualified Taskwarrior project for the goal and use it
+throughout:
+
+```text
+<repo>.<goal>
+```
+
+Follow dev-loop-task's namespace contract: reuse the stable repo/project root
+for the current repository, choose an unused goal segment beneath it for fresh
+work, and reuse the exact existing leaf when resuming. The repo root groups this
+goal with the repository's other Taskwarrior work; the full leaf isolates this
+controller. Never use a bare goal slug, and never claim or review unrelated
+work. Include this durable annotation in every initial task's atomic creation:
 
 ```text
 loop-round: 1
@@ -96,8 +106,10 @@ needs a round assignment.
    is clean enough for `dev-loop-review` to merge into it. Never stash,
    overwrite, or discard unrelated user changes merely to make it clean.
 3. Inspect existing tasks for the project, existing project review branches,
-   and dev-loop status before creating anything. Resume durable state when it
-   exists; create no duplicate tasks or branches.
+   and dev-loop status before creating anything. Use exact equality on the full
+   `<repo>.<goal>` leaf for controller state; do not let a parent-project match
+   pull sibling goals into the run. Resume durable state when it exists; create
+   no duplicate tasks or branches.
 4. Run dev-loop setup once and establish one stable, unique `DEV_LOOP_OWNER`
    for the entire run.
 5. On a fresh goal only, decompose it with dev-loop-task. Create every task via
@@ -136,9 +148,9 @@ cannot advance safely.
 ### 2. Review and act with dev-loop-review
 
 Snapshot the project's pending task UUIDs, then run dev-loop-review scoped to
-the project slug:
+the exact fully qualified project:
 
-- collect branches with `dlr-collect.sh <goal-slug>`;
+- collect branches with `dlr-collect.sh <repo>.<goal>`;
 - review each actionable branch against its task acceptance criteria and the
   original goal-level outcome;
 - run checks through `dlr-test.sh` when the verdict needs execution;
@@ -205,9 +217,9 @@ round 6 under the default limit):
 
 ## Report the result
 
-On success, report the project slug, rounds used, tasks completed, review
-branches merged, checks run, and resulting integration-branch HEAD. State
-explicitly that there are no remaining project tasks or review branches.
+On success, report the fully qualified project, rounds used, tasks completed,
+review branches merged, checks run, and resulting integration-branch HEAD.
+State explicitly that there are no remaining project tasks or review branches.
 
 On any stop, report the same state plus the exact reason, the current round,
 preserved artifacts, and the smallest decision needed to continue. Never push

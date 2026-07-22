@@ -23,7 +23,7 @@ printf '%s\n' \
   >"$TASKRC"
 
 uuid="$(
-  "$CREATE" --project claim-test --description 'claim exactly once' \
+  "$CREATE" --project demo.claim-test --description 'claim exactly once' \
     --acceptance 'one concurrent owner wins' 2>"$TMP/create.err"
 )"
 
