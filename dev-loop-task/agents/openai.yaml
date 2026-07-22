@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dev Loop Task"
-  short_description: "Queue dev-loop work without starting it"
-  default_prompt: "Use $dev-loop-task to create a Taskwarrior task for this work without starting implementation."
