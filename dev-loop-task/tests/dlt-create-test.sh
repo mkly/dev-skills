@@ -35,6 +35,8 @@ dependency="$($CREATE \
   --acceptance 'focused parser checks pass' \
   2>"$TMP/dependency.err")"
 assert_uuid "$dependency"
+grep -F 'Taskwarrior sync is not configured; continuing' "$TMP/dependency.err" >/dev/null \
+  || fail "creation did not tolerate an unconfigured Taskwarrior sync"
 
 created_json="$($CREATE --json \
   --project demo \
@@ -102,16 +104,6 @@ set -e
 [ "$bad_dep_rc" -eq 20 ] || fail "bad dependency exited $bad_dep_rc"
 [ ! -s "$TMP/invalid.out" ] || fail "invalid creation wrote stdout"
 [ ! -s "$TMP/bad-dep.out" ] || fail "bad dependency wrote stdout"
-
-printf '%s\n' 'locking=0' >"$TMP/unlocked.taskrc"
-set +e
-TASKRC="$TMP/unlocked.taskrc" TASKDATA="$TMP/unlocked-data" \
-  $CREATE --project demo --description 'unsafe locking' --acceptance 'never imported' \
-  >"$TMP/unlocked.out" 2>"$TMP/unlocked.err"
-unlocked_rc=$?
-set -e
-[ "$unlocked_rc" -eq 20 ] || fail "disabled locking exited $unlocked_rc"
-[ ! -s "$TMP/unlocked.out" ] || fail "disabled locking wrote stdout"
 
 # Concurrent creators must each receive the UUID of their own imported task.
 concurrent=8

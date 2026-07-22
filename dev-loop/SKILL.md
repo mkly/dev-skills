@@ -3,19 +3,21 @@ name: dev-loop
 description: >-
   Run a development pass that uses dev-loop-task to break a goal into durable
   Taskwarrior tasks when needed, then claims and executes each one inside an
-  isolated Incus box leased via Crabbox. Ensures one owner per task and merges
-  each box's changes onto a new LOCAL review branch without pushing or
-  auto-merging. Use when asked to "work through a goal", "split this into tasks
-  and do them", parallelize work across agents, or run changes in a
-  sandboxed/throwaway environment with Taskwarrior + Crabbox + Incus.
+  isolated Incus box leased via Crabbox. Ensures one owner per task for agents
+  sharing the same host and dev-loop state directory, and merges each box's
+  changes onto a new LOCAL review branch without pushing or auto-merging. Use
+  when asked to "work through a goal", "split this into tasks and do them",
+  parallelize work across agents, or run changes in a sandboxed/throwaway
+  environment with Taskwarrior + Crabbox + Incus.
 ---
 
 # dev-loop
 
 Orchestrate a goal end-to-end: **decompose → claim → work in an isolated box →
-merge back to a local review branch → done.** Taskwarrior is the task store and
-the lock; Crabbox (Incus provider) is the isolated execution box; the per-task
-git worktree is snapshotted into a new local branch for review.
+merge back to a local review branch → done.** Taskwarrior stores tasks and
+owner state; a host-wide `flock` serializes claims; Crabbox (Incus provider) is
+the isolated execution box; the per-task git worktree is snapshotted into a new
+local branch for review.
 
 ## Load the task-creation component when needed
 
@@ -37,8 +39,10 @@ an environment blocker instead of copying its workflow by hand.
 
 - **One owner per task.** Never work a task you have not claimed via
   `dl-claim.sh`. If a claim returns exit `10`, the task is someone else's — pick
-  another. This is the skill's hard guarantee, and `dl-box.sh`, `dl-run.sh`, and
-  `dl-merge-back.sh` enforce it unless you pass `--force`.
+  another. For agents sharing a host and `DEV_LOOP_STATE_DIR`, this is the
+  skill's hard guarantee, and `dl-box.sh`, `dl-run.sh`, and `dl-merge-back.sh`
+  enforce it unless you pass `--force`. TaskChampion sync across separate
+  replicas is not a distributed lock; use external coordination in that setup.
 - **Never push to a remote.** Merge-back creates a *local* branch only.
 - **Never auto-merge** the review branch into `main`/current — that is a
   deliberate, separate human/agent decision after review.
@@ -142,9 +146,11 @@ uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh)"          # auto-pick highe
 # or: uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid>)"   # claim a specific task
 ```
 
-`dl-claim.sh` acquires an OS `flock` (a true mutex on this single-host
-file-based Taskwarrior), then compare-and-swaps the `assignee` (write → read
-back → verify) as a cross-host safety layer, and `task start`s the task.
+`dl-claim.sh` acquires an OS `flock` around the multi-command claim sequence,
+writes a nonce-bearing `assignee`, reads it back for verification, and then
+`task start`s the task. Taskwarrior 3 serializes each command through its
+TaskChampion/SQLite store; the `flock` keeps the complete sequence exclusive
+among dev-loop agents sharing the host and `DEV_LOOP_STATE_DIR`.
 
 - **Auto-pick with nothing claimable** → exit `0`, empty stdout. Stop and report
   "no ready tasks".

@@ -54,7 +54,7 @@ no effect until the next warmup.
 | Script              | Args                                              | stdout            | Notes |
 |---------------------|---------------------------------------------------|-------------------|-------|
 | `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
-| `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | flock + CAS lock. Auto-pick when no uuid. |
+| `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | host-wide flock + verified owner write. Auto-pick when no uuid. |
 | `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
 | `dl-run.sh`         | `<uuid> [--force] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
@@ -78,23 +78,28 @@ the producer's predicted review branch, then pass both `--depends <uuid>` and
 `--input <review-branch>` to the downstream creation call. Read the
 dev-loop-task skill for sizing, duplicate detection, and stacked-chain rules.
 
-### Claim — the lock (flock + compare-and-swap)
+### Claim — the lock (flock + verified owner write)
 
-`dl-claim.sh` is the hard guarantee that two owners never work one task:
+`dl-claim.sh` is the hard guarantee that two owners sharing a host and
+`DEV_LOOP_STATE_DIR` never work one task:
 
 1. Small randomized jitter de-synchronizes concurrent starts.
 2. `flock -w 10` on `$DEV_LOOP_STATE_DIR/locks/select.lock` (fd 9) — a true
-   mutex for this file-based Taskwarrior. Both by-uuid and auto-pick claims use
-   the same host-wide claim mutex, so selection and explicit claims exclude each
-   other.
-3. Inside the lock, compare-and-swap: write
+   host-wide mutex around the multi-command claim. Both by-uuid and auto-pick
+   claims use the same mutex, so selection and explicit claims exclude each
+   other even though Taskwarrior 3's SQLite transaction covers one command at a
+   time.
+3. Inside the lock, write
    `assignee:${DEV_LOOP_OWNER}#<pid>-<random>`, then read it back via
-   `task export | jq`; if the exact value is not still present, exit `10`. This
-   is the cross-host degradation path (if a taskd sync server is ever added,
-   where flock cannot span hosts). Display and ownership checks strip the
-   `#...` nonce suffix.
+   `task export | jq`; if the exact value is not still present, exit `10`.
+   Display and ownership checks strip the `#...` nonce suffix.
 4. `task <uuid> start` (sets `+ACTIVE` and the `start` timestamp used for
    staleness), annotate `claimed`, print the uuid.
+
+TaskChampion synchronization across separate replicas does not provide an
+atomic read-modify-write claim. Agents operating on different hosts or data
+directories therefore need an external coordinator; the nonce verification is
+not a distributed mutex.
 
 Outcomes: claimed → `0` + uuid; owned by another → `10`; bad/non-pending task →
 `20`; auto-pick with nothing available → `0` with empty stdout.

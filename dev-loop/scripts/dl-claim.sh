@@ -9,10 +9,11 @@
 # Lost race (owned by another): exit 10. Auto-pick with nothing available:
 # exit 0 with EMPTY stdout. Bad uuid / not pending: exit 20.
 #
-# Locking: a per-host flock (true mutex for this file-based Taskwarrior) wraps
-# the read-modify-verify. A compare-and-swap on the `assignee` field (write,
-# then read back and confirm it is still ours) is a best-effort cross-host
-# layer should a taskd sync server ever be added.
+# Locking: a per-host flock wraps the multi-command read-modify-verify sequence;
+# Taskwarrior 3's SQLite transaction boundary covers each command, not the whole
+# claim. Reading `assignee` back detects a competing local write. TaskChampion
+# synchronization is not a distributed mutex, so claims on separate replicas
+# require external coordination.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -107,8 +108,8 @@ claim_one() {
     fi
   fi
 
-  # Compare-and-swap: write our owner plus a nonce, read it back, confirm the
-  # exact value. Display/ownership checks elsewhere strip "#..." via owner_base.
+  # Write our owner plus a nonce, read it back, and confirm the exact value.
+  # Display/ownership checks elsewhere strip "#..." via owner_base.
   claim_value="${DEV_LOOP_OWNER}#$$-${RANDOM}${RANDOM}"
   dl_do dl_task "$uuid" modify assignee:"$claim_value"
   if [ -z "$DL_DRY_RUN" ]; then
@@ -151,7 +152,7 @@ for c in "${candidates[@]:-}"; do
   [ -n "$c" ] || continue
   rc=0; claim_one "$c" || rc=$?
   [ "$rc" -eq "$DL_OK" ] && exit "$DL_OK"          # got one
-  [ "$rc" -eq "$DL_LOST" ] && continue             # cross-host race: try next
+  [ "$rc" -eq "$DL_LOST" ] && continue             # competing owner: try next
   exit "$rc"                                        # unexpected
 done
 

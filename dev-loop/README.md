@@ -23,7 +23,7 @@ features such as `mapfile` and associative arrays.
 
 | Tool | Why | Verified with |
 |------|-----|---------------|
-| [Taskwarrior](https://taskwarrior.org/) (`task`) | task store **and** the claim lock | `2.6.2` (file-based, no taskd needed) |
+| [Taskwarrior](https://taskwarrior.org/) (`task`) | durable task and owner store | `3.4.2` (TaskChampion/SQLite) |
 | [Crabbox](https://github.com/openclaw/crabbox) (`crabbox`) | leases the isolated execution box | `0.32.0` |
 | [Incus](https://linuxcontainers.org/incus/) (`incus`) | the box provider | `6.0.4` |
 | `git`, `jq`, `flock`, `bash` | worktrees + local review branches, JSON parsing, the OS mutex | — |
@@ -84,9 +84,11 @@ distinct value first — see `reference.md`.
 
 ## Guarantees & boundaries
 
-- **One owner per task.** `dl-claim.sh` takes an OS `flock` (true mutex on this
-  single host) plus a compare-and-swap on the `assignee` UDA. A lost race exits
-  `10`; the agent picks another task.
+- **One owner per task on one host.** `dl-claim.sh` takes an OS `flock` around
+  the claim sequence and verifies its nonce-bearing `assignee` UDA write. A
+  lost race exits `10`; the agent picks another task. Separate TaskChampion
+  sync replicas require external coordination because sync is not a
+  distributed mutex.
 - **No remote push, no auto-merge.** Merge-back snapshots the task's own git
   worktree and re-parents it onto the recorded base as one commit on a fresh
   *local* review branch — a purely local operation, no box round-trip.

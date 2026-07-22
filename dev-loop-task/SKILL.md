@@ -38,6 +38,12 @@ dev-loop setup, Crabbox, or Incus.
 
 ## 1. Establish the task set
 
+Run `task rc.confirmation=no sync` before inspecting or creating tasks. Continue
+when it succeeds or reports `No sync.* settings are configured`; the latter
+means there is simply nothing to sync. Stop on any other sync failure.
+`dlt-create.sh` repeats this check immediately before each real import and skips
+it for `--dry-run`.
+
 State the requested outcome in observable terms. Choose one existing project
 slug when the work belongs to an active goal; otherwise choose a concise unused
 slug. Inspect pending tasks before creating anything and reuse an existing task
@@ -92,8 +98,8 @@ chain an additional end-to-end acceptance criterion for the assembled behavior.
 Use `dlt-create.sh`, not `task add` followed by `task +LATEST`. The helper
 generates the UUID first and imports the complete task—including acceptance,
 dependencies, and annotations—in one Taskwarrior operation. This makes its
-returned UUID exact even when other agents create tasks concurrently. It
-refuses to create tasks when Taskwarrior's internal locking is disabled.
+returned UUID exact even when other agents create tasks concurrently.
+TaskChampion/SQLite serializes the import.
 
 Create a simple task:
 
@@ -149,7 +155,7 @@ Report the project, short UUID, description, dependencies/readiness, and
 acceptance criteria. End with an explicit statement that no task was claimed or
 started.
 
-The helper exits `20` for usage, missing tools, disabled Taskwarrior locking,
+The helper exits `20` for usage, missing tools, sync failures,
 ambiguous/missing dependencies, import failures, or failed verification. Treat
 a missing/broken `task` or `jq` installation as an environment problem and
 apply dev-ask; do not recreate the helper's import workflow by hand.

@@ -46,7 +46,8 @@ Options:
   -h, --help                show this help
 
 Default stdout is the exact created UUID. Diagnostics and dry-run payloads go
-to stderr. Exit: 0 success, 20 usage/precondition/import/verification failure.
+to stderr. Actual creation runs `task sync` first; dry-run does not. Exit: 0
+success, 20 usage/precondition/sync/import/verification failure.
 EOF
 }
 
@@ -144,14 +145,29 @@ dlt_task_export() {
   dlt_task rc.json.array=on "$@" export
 }
 
-if ! TASK_LOCKING="$(dlt_task _get rc.locking 2>/dev/null)"; then
-  dlt_die "$DLT_PRECOND" "could not read Taskwarrior's locking setting"
+dlt_sync() {
+  local output rc
+  if output="$(dlt_task sync 2>&1)"; then
+    dlt_log "Taskwarrior sync complete"
+    return
+  else
+    rc=$?
+  fi
+
+  case "$output" in
+    *"No sync.* settings are configured."*)
+      dlt_log "Taskwarrior sync is not configured; continuing"
+      return
+      ;;
+  esac
+
+  [ -z "$output" ] || printf '%s\n' "$output" >&2
+  dlt_die "$DLT_PRECOND" "Taskwarrior sync failed (exit $rc)"
+}
+
+if [ "$DRY_RUN" -eq 0 ]; then
+  dlt_sync
 fi
-case "${TASK_LOCKING,,}" in
-  0|false|no|off)
-    dlt_die "$DLT_PRECOND" "Taskwarrior locking is disabled (rc.locking=$TASK_LOCKING); refusing concurrent-safe creation"
-    ;;
-esac
 
 resolve_dependency() {
   local ref="$1" exported count resolved
@@ -273,9 +289,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # `task import` identifies a task by UUID. Supplying our own UUID and complete
-# JSON makes this one Taskwarrior-locked write; there is no mutable +LATEST
-# selector for another creator to race. The precondition above rejects a task
-# store whose internal locking has been explicitly disabled.
+# JSON makes this one Taskwarrior write; there is no mutable +LATEST selector
+# for another creator to race. TaskChampion/SQLite serializes the write.
 if ! printf '[%s]\n' "$PAYLOAD" | dlt_task import - >&2; then
   dlt_die "$DLT_PRECOND" "Taskwarrior import failed; proposed UUID was $UUID"
 fi
