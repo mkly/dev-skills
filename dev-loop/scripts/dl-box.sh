@@ -153,9 +153,23 @@ ensure_worktree "$wt" "$wbranch" "$base"
 [ "$had_base" -eq 1 ] || dl_anno_set "$UUID" base "$base"
 [ "$had_wt" -eq 1 ]   || dl_anno_set "$UUID" worktree "$wt"
 
-# 2. Reuse an existing live box if one is recorded.
+# 2. Reuse an existing live box if one is recorded AND still ours. A task that
+#    was released had its box parked for reuse while keeping the box=
+#    annotation, so a live lease here may since have been adopted by another
+#    pending task. Reusing it on that basis is what puts two live tasks in one
+#    box; warm a fresh lease instead and leave theirs alone.
 existing="$(dl_anno_get "$UUID" box)"
+existing_alive=0
 if [ -n "$existing" ] && dl_box_alive "$existing"; then
+  existing_alive=1
+  holder="$(dl_box_holder "$existing" "$UUID")"
+  if [ -n "$holder" ]; then
+    dl_warn "recorded box '$existing' now belongs to task ${holder:0:8}; warming a fresh lease"
+    existing=""
+    existing_alive=0
+  fi
+fi
+if [ "$existing_alive" -eq 1 ]; then
   # A released-then-reclaimed task's box may also be the repo's parked box; take
   # it off the parked file so another task cannot adopt it out from under us.
   parked="$(dl_idle_box_claim)"
@@ -172,7 +186,16 @@ fi
 handle=""
 if [ -z "$DL_DRY_RUN" ]; then
   parked="$(dl_idle_box_claim)"
-  if [ -n "$parked" ]; then
+  parked_holder=""
+  [ -z "$parked" ] || parked_holder="$(dl_box_holder "$parked" "$UUID")"
+  if [ -n "$parked_holder" ]; then
+    # Parked but not idle: another pending task still holds this lease, so it
+    # was parked in error (a release leaves box= recorded). Adopting it would
+    # reclaim the box out from under a live task. Do not adopt it and do not
+    # stop it — it is not ours to reap. Leaving it off the parked slot is
+    # correct: the holder finds it via its own box= annotation, not the slot.
+    dl_warn "parked box '$parked' is still held by task ${parked_holder:0:8}; warming a fresh lease"
+  elif [ -n "$parked" ]; then
     if adoptable "$parked" \
        && ( cd "$wt" && crabbox run -provider "$CRABBOX_PROVIDER" \
               -id "$parked" -keep -reclaim -sync-only ) >&2; then

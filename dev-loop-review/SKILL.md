@@ -133,7 +133,7 @@ For every object with `merged: false` and `superseded: false`, in order:
    inside a box — never on the host:
 
    ```sh
-   scripts/dlr-test.sh "$branch" -- bash -lc 'pytest -q'
+   scripts/dlr-test.sh "$branch" --compact -- bash -lc 'pytest -q'
    scripts/dlr-test.sh "$branch" --keep-box -- bash -lc 'make build'  # iterate, same box
    ```
 
@@ -144,6 +144,9 @@ For every object with `merged: false` and `superseded: false`, in order:
    usually already `done` and this skill must not touch it beyond
    `dlr-merge.sh`'s audit annotation. Pass `--keep-box` to run more than one
    command without re-warming; the box stops automatically otherwise.
+   Pass `--compact` for verbose routine checks: it uses in-box `rtk test` when
+   available, or warns and runs the original command unfiltered. Omit it when
+   the verdict needs exact raw output.
 4. **Record a verdict:** **clean** (nothing worth a task) or **needs-fixes**
    (with the concrete findings behind it). Nits too small to be worth a task
    round-trip do not block a clean verdict — mention them in the summary.

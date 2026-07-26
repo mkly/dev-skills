@@ -56,7 +56,7 @@ no effect until the next warmup.
 | `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
 | `dl-claim.sh`       | `[<uuid>] [--steal-after <dur>] [--dry-run]`       | claimed uuid      | host-wide flock + verified owner write. Auto-pick when no uuid. |
 | `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
-| `dl-run.sh`         | `<uuid> [--force] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--no-sync` skips. Forwards cmd exit code. |
+| `dl-run.sh`         | `<uuid> [--force] [--compact] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--compact` uses in-box RTK with raw fallback; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
 | `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; park the live lease for reuse (or stop with `--stop-box`), clear `assignee`; task stays pending and its worktree remains. |
 | `dl-done.sh`        | `<uuid> [--stop-box] [--keep-worktree] [--force] [--dry-run]` | —          | `task done` + park the live lease for reuse (or stop with `--stop-box`) + remove worktree and scratch branch `dl/<slug>`. Refuses to remove changed work with no `branch=` unless forced/kept. `review/<slug>` is kept. |
@@ -174,10 +174,16 @@ files, but Crabbox runs only see tracked files.
 
 ```sh
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'apt-get update && make'   # syncs worktree up
-/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make test'                # syncs again (latest edits)
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" --compact -- bash -lc 'make test'      # compact with in-box RTK, raw fallback
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" --no-sync -- bash -lc 'make test'      # fast re-run, skip upload
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -sync-only --                          # just sync, run nothing
 ```
+
+`--compact` wraps the in-box command with `rtk test` when `rtk` is on the
+box's `PATH`. If absent, it prints one warning and executes the original argv
+unchanged. Exit codes are forwarded in both cases. Use compact mode for routine
+verbose checks; omit it when exact raw output is required. It cannot be
+combined with Crabbox `-sync-only` because there is no command to filter.
 
 Extra flags before `--` are passed through to `crabbox run` (e.g. `-allow-env`,
 `-env-from-profile`, `-artifact-glob`). The default `run` adds `-keep`,

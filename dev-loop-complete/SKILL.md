@@ -153,7 +153,8 @@ the exact fully qualified project:
 - collect branches with `dlr-collect.sh <repo>.<goal>`;
 - review each actionable branch against its task acceptance criteria and the
   original goal-level outcome;
-- run checks through `dlr-test.sh` when the verdict needs execution;
+- run checks through `dlr-test.sh` when the verdict needs execution, using
+  `--compact` for verbose routine checks and raw mode for exact diagnostics;
 - merge and safely delete clean branches with `dlr-merge.sh`;
 - leave branches with findings unmerged and create properly based, dependent
   fix tasks through dev-loop-task as dev-loop-review requires, passing

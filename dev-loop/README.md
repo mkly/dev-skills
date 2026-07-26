@@ -76,7 +76,7 @@ uuid="$("$dev_task_scripts/dlt-create.sh" \
 task rc.confirmation=no sync                                       # Phase 1: publish completed batch
 uuid="$("$dev_loop_scripts/dl-claim.sh" "$uuid")"                 # Phase 2: claim (the lock)
 "$dev_loop_scripts/dl-box.sh" "$uuid"                             # Phase 3: warm an Incus box
-"$dev_loop_scripts/dl-run.sh" "$uuid" -- bash -lc 'make && make test'
+"$dev_loop_scripts/dl-run.sh" "$uuid" --compact -- bash -lc 'make && make test'
 branch="$("$dev_loop_scripts/dl-merge-back.sh" "$uuid")"          # Phase 4: → new local branch
 base="$(task "$uuid" export | jq -r '.[0].annotations | map(.description) | map(select(startswith("base="))) | last | .[5:]')"
 git log --oneline "$base..$branch"                                # review (script also prints log/stat)

@@ -2,8 +2,9 @@
 # dl-run.sh — Phase 3: run a command inside a task's box.
 #
 #   dl-run.sh <uuid> [crabbox flags...] -- <cmd...>
-#   dl-run.sh <uuid> --no-sync  -- <cmd...>     # skip the upload this run
-#   dl-run.sh <uuid> -sync-only --              # just sync, run nothing
+#   dl-run.sh <uuid> --compact -- <cmd...>       # compact output with in-box RTK
+#   dl-run.sh <uuid> --no-sync  -- <cmd...>      # skip the upload this run
+#   dl-run.sh <uuid> -sync-only --               # just sync, run nothing
 #
 # Sync model: the task's own git WORKTREE (recorded as worktree= by dl-box.sh) is
 # the single source of truth. Edit files there with normal tools; the box is a
@@ -23,8 +24,10 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-run.sh <uuid> [--force] [--no-sync|--resync] [crabbox run flags...] -- <cmd...>
+Usage: dl-run.sh <uuid> [--force] [--compact] [--no-sync|--resync] [crabbox run flags...] -- <cmd...>
 
+  --compact    compact command output with in-box `rtk test`; run unfiltered
+               with a warning when RTK is unavailable in the box
   --no-sync    skip the upload this run (default is to sync the local tree up)
   --resync     accepted for compatibility; syncing up is already the default
   --force      bypass owner check
@@ -39,11 +42,12 @@ EOF
 UUID="$1"; shift
 case "$UUID" in -h|--help) usage; exit 0 ;; esac
 
-EXTRA=(); CMD=(); seen_sep=0; RESYNC=0; FORCE_NOSYNC=0; FORCE=0
+EXTRA=(); CMD=(); seen_sep=0; RESYNC=0; FORCE_NOSYNC=0; FORCE=0; COMPACT=0
 while [ "$#" -gt 0 ]; do
   if [ "$seen_sep" -eq 1 ]; then CMD+=("$1"); shift; continue; fi
   case "$1" in
     --)        seen_sep=1 ;;
+    --compact) COMPACT=1 ;;
     --resync)  RESYNC=1 ;;
     --no-sync) FORCE_NOSYNC=1 ;;
     --force)   FORCE=1 ;;
@@ -75,6 +79,9 @@ for e in ${EXTRA[@]+"${EXTRA[@]}"}; do [ "$e" = "-sync-only" ] && sync_only=1; d
 if [ "$FORCE_NOSYNC" -eq 1 ] && [ "$sync_only" -eq 1 ]; then
   dl_die "$DL_PRECOND" "--no-sync cannot be combined with -sync-only"
 fi
+if [ "$COMPACT" -eq 1 ] && [ "$sync_only" -eq 1 ]; then
+  dl_die "$DL_PRECOND" "--compact cannot be combined with -sync-only"
+fi
 if [ "${#CMD[@]}" -eq 0 ] && [ "$sync_only" -eq 0 ]; then
   usage; dl_die "$DL_PRECOND" "no command given (expected '<uuid> ... -- <cmd>')"
 fi
@@ -88,13 +95,18 @@ nosync=0
 [ "$FORCE_NOSYNC" -eq 1 ] && nosync=1
 [ "$RESYNC" -eq 1 ] && nosync=0
 
+payload=(${CMD[@]+"${CMD[@]}"})
+if [ "$COMPACT" -eq 1 ]; then
+  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then exec rtk test "$@"; fi; printf "%s\n" "dev-loop: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-loop-compact ${CMD[@]+"${CMD[@]}"})
+fi
+
 run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")
 [ "$nosync" -eq 1 ] && run+=(-no-sync)
 run+=(${EXTRA[@]+"${EXTRA[@]}"})
 run+=(--)
-run+=(${CMD[@]+"${CMD[@]}"})
+run+=(${payload[@]+"${payload[@]}"})
 
-dl_log "run on $handle (upload=$([ "$nosync" -eq 1 ] && echo skip || echo yes)): ${CMD[*]:-<flags only>}"
+dl_log "run on $handle (upload=$([ "$nosync" -eq 1 ] && echo skip || echo yes), compact=$([ "$COMPACT" -eq 1 ] && echo requested || echo no)): ${CMD[*]:-<flags only>}"
 rc=0
 dl_do "${run[@]}" || rc=$?
 exit "$rc"

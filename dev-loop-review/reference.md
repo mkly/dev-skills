@@ -107,7 +107,7 @@ resulting HEAD sha on stdout.
 - Merge conflict → `git merge --abort`, branch kept, exit `30`.
 - `--dry-run` reports the plan and changes nothing.
 
-### `dlr-test.sh <branch> [--keep-box] [--no-sync] [--dry-run] -- <cmd...>`
+### `dlr-test.sh <branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>`
 Run `<cmd...>` against a review branch inside a Crabbox/Incus box — the same
 sandbox dev-loop uses for build/test, never the host. Use it when a verdict
 needs the test suite/build/lint actually **executed**, not just read via
@@ -125,6 +125,10 @@ needs the test suite/build/lint actually **executed**, not just read via
   *before* the command runs (bad branch, missing tools).
 - Stops the box after the run unless `--keep-box` (pass it to run several
   commands against the same branch without re-warming each time).
+- `--compact` wraps the command with in-box `rtk test` when available. When
+  RTK is absent it prints one warning and runs the original argv unfiltered;
+  either path preserves the command's exit code. Omit it when raw output is
+  required for diagnosis.
 - `--no-sync` skips re-uploading the worktree (fast re-run when nothing local
   changed since the last call for this branch).
 - Never edits, merges, or pushes anything; never touches the current
@@ -193,7 +197,7 @@ scripts/dlr-diff.sh "$branch"
 
 **Actually run the tests for a branch (in the box, not the host):**
 ```sh
-scripts/dlr-test.sh "$branch" -- bash -lc 'pytest -q'
+scripts/dlr-test.sh "$branch" --compact -- bash -lc 'pytest -q'
 echo "exit: $?"          # 0 → verdict leans clean; nonzero → needs-fixes
 ```
 A fresh box has no Python virtualenv or installed dependencies — a bare
@@ -208,7 +212,7 @@ scripts/dlr-test.sh "$branch" --keep-box \
 **Iterate several checks against one branch without re-warming:**
 ```sh
 scripts/dlr-test.sh "$branch" --keep-box -- bash -lc 'make build'
-scripts/dlr-test.sh "$branch"             -- bash -lc 'pytest -q'   # last call: no --keep-box, box stops
+scripts/dlr-test.sh "$branch" --compact   -- bash -lc 'pytest -q'   # last call: no --keep-box, box stops
 ```
 
 **Inspect the producing task directly (anything not in the collected object):**

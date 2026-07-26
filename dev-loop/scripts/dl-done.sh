@@ -120,7 +120,13 @@ fi
 # Only expose the lease for reuse after the unmerged-worktree guard and cleanup
 # have succeeded. Crabbox's idle timeout reaps it if the loop ends here.
 handle="$(dl_anno_get "$UUID" box)"
-if [ -n "$handle" ]; then
+holder=""
+[ -z "$handle" ] || holder="$(dl_box_holder "$handle" "$UUID")"
+if [ -n "$handle" ] && [ -n "$holder" ]; then
+  # Another pending task adopted this lease while we held it recorded. It is
+  # not ours to park or stop; both would disrupt a live task.
+  dl_warn "box $handle is held by task ${holder:0:8}; leaving it alone"
+elif [ -n "$handle" ]; then
   if [ "$STOP_BOX" -eq 1 ]; then
     dl_log "stopping box $handle"
     dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"

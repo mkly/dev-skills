@@ -65,7 +65,11 @@ if [ -n "$handle" ]; then
       dl_log "a box is already parked ($parked); stopping box $handle"
       dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
     else
+      # Giving the lease away and keeping box= recorded is what lets a later
+      # re-claim of this task reuse a box another task has since adopted. The
+      # task keeps no claim on a box it just parked; a re-claim warms fresh.
       dl_idle_box_park "$handle"
+      dl_anno_set "$UUID" box ""
       dl_log "parked box $handle for the next task (idle timeout will reap it)"
     fi
   else

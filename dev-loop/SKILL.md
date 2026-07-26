@@ -178,7 +178,7 @@ Always capture the uuid from stdout and use it for every subsequent phase.
 ```sh
 /path/to/dev-loop-skill/scripts/dl-box.sh "$uuid"                          # warm or reuse the task's box
 /path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
-/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'pytest -q'  # iterate; edits accumulate
+/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" --compact -- bash -lc 'pytest -q'  # compact when in-box RTK exists
 ```
 
 For a fresh lease, keep the `dl-box.sh` command alive until it exits. The
@@ -218,6 +218,9 @@ current action is to keep waiting on the existing warmup session.
   suite. Run the broader suite at most once, right before merge-back, and only
   when the change could plausibly affect code outside its own slice — a
   prompt-text or doc change does not need 400 unrelated tests re-proven.
+- Pass `--compact` for verbose routine build, test, or lint output. The wrapper
+  uses in-box `rtk test` when available and otherwise warns and runs the exact
+  command unfiltered. Omit it when diagnosing a failure requires raw output.
 - Crabbox syncs only git-**tracked** files, so box-generated build artifacts
   survive a sync, but **NEW files you create must be `git add`-ed to reach the
   box** (merge-back snapshots the whole worktree, so it picks up untracked

@@ -251,6 +251,39 @@ dl_box_alive() {
   crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
 }
 
+# dl_box_holder <handle> [exclude-uuid] — print the uuid of a PENDING task that
+# currently records <handle> as its box=, ignoring <exclude-uuid>. Empty when
+# nobody holds it.
+#
+# Liveness is not ownership. A lease can be alive and already belong to another
+# task — an agent that released a task parks its box while the still-pending
+# task keeps its box= annotation, and a second agent working the same repo then
+# adopts that lease. Both sides afterwards believe they own it, and every
+# `crabbox run -reclaim` re-points the box's workdir, yanking it out from under
+# whoever ran last. Park, adopt, and reuse all have to ask this question, not
+# just `dl_box_alive`. The parked-box slot is per repo, not per owner, so the
+# tasks involved are frequently not the caller's own.
+#
+# Resolved against Taskwarrior rather than a crabbox label because the task
+# annotation is what every other dev-loop phase already treats as authoritative,
+# and it stays correct with no provider support. Uses "last annotation wins", the
+# same rule as dl_anno_get, so a cleared box= reads as unheld.
+dl_box_holder() {
+  local handle="$1" exclude="${2:-}"
+  [ -n "$handle" ] || return 0
+  dl_task_export status:pending \
+    | jq -r --arg h "$handle" --arg x "$exclude" '
+        map(select(.uuid != $x))
+        | map(select(
+            ((.annotations // [])
+             | map(.description)
+             | map(select(startswith("box=")))
+             | last // "") == ("box=" + $h)
+          ))
+        | (.[0].uuid // "")
+      ' 2>/dev/null
+}
+
 # dl_idle_box_file — path of this repo's parked-box state file.
 dl_idle_box_file() {
   printf '%s/idle-box-%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)"

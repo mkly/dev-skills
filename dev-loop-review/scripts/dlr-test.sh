@@ -3,7 +3,7 @@
 # review branch inside an isolated Crabbox/Incus box — the SAME sandbox
 # dev-loop uses for build/test, never the host.
 #
-#   dlr-test.sh <branch> [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
+#   dlr-test.sh <branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
 #
 # The producing task is usually already `done` and its own dev-loop box long
 # since stopped, and this skill must never mutate that task beyond
@@ -29,8 +29,10 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dlr-test.sh <branch> [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
+Usage: dlr-test.sh <branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
 
+  --compact    compact command output with in-box `rtk test`; run unfiltered
+               with a warning when RTK is unavailable in the box
   --keep-box   don't stop the box after this run (reuse it for another call)
   --no-sync    skip the worktree upload this run (fast re-run, no local changes)
   --dry-run    log the crabbox invocation instead of running it
@@ -41,11 +43,12 @@ Exit: 0 ok, 20 precondition/usage, 30 branch not present locally.
 EOF
 }
 
-BRANCH=""; KEEP_BOX=0; NO_SYNC=0; DRY=0; CMD=(); seen_sep=0
+BRANCH=""; KEEP_BOX=0; NO_SYNC=0; DRY=0; COMPACT=0; CMD=(); seen_sep=0
 while [ "$#" -gt 0 ]; do
   if [ "$seen_sep" -eq 1 ]; then CMD+=("$1"); shift; continue; fi
   case "$1" in
     --)          seen_sep=1 ;;
+    --compact)   COMPACT=1 ;;
     --keep-box)  KEEP_BOX=1 ;;
     --no-sync)   NO_SYNC=1 ;;
     --dry-run)   DRY=1 ;;
@@ -133,16 +136,21 @@ else
   fi
 fi
 
+payload=("${CMD[@]}")
+if [ "$COMPACT" -eq 1 ]; then
+  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then exec rtk test "$@"; fi; printf "%s\n" "dev-loop-review: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-loop-review-compact "${CMD[@]}")
+fi
+
 run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")
 [ "$NO_SYNC" -eq 1 ] && run+=(-no-sync)
 run+=(--)
-run+=("${CMD[@]}")
+run+=("${payload[@]}")
 
 rc=0
 if [ "$DRY" -eq 1 ]; then
-  dlr_log "DRY-RUN: (cd $wt && ${run[*]} ${CMD[*]})"
+  dlr_log "DRY-RUN: (cd $wt && ${run[*]})"
 else
-  dlr_log "run on $handle (upload=$([ "$NO_SYNC" -eq 1 ] && echo skip || echo yes)): ${CMD[*]}"
+  dlr_log "run on $handle (upload=$([ "$NO_SYNC" -eq 1 ] && echo skip || echo yes), compact=$([ "$COMPACT" -eq 1 ] && echo requested || echo no)): ${CMD[*]}"
   ( cd "$wt" && "${run[@]}" ) || rc=$?
 fi
 
