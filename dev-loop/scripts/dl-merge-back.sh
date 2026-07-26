@@ -105,6 +105,16 @@ if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
 fi
 [ "$BRANCH" != "$current" ] || dl_die "$DL_MERGE" "refusing to overwrite the current branch '${BRANCH}'; choose another"
 
+sign_flag=()
+if [ "$(git config --bool commit.gpgsign 2>/dev/null || echo 'false')" = "true" ]; then
+  signing_key="$(git config user.signingkey 2>/dev/null || echo '')"
+  if [ -n "$signing_key" ]; then
+    sign_flag=("-S${signing_key}")
+  else
+    sign_flag=("-S")
+  fi
+fi
+
 if git cat-file -e "${base}^{commit}" 2>/dev/null; then
   # No real change vs base → nothing to review.
   if git diff --quiet "${base}^{tree}" "$snap_tree" 2>/dev/null; then
@@ -112,13 +122,13 @@ if git cat-file -e "${base}^{commit}" 2>/dev/null; then
   fi
   new_commit="$(GIT_AUTHOR_NAME="$author_name"   GIT_AUTHOR_EMAIL="$author_email" \
                 GIT_COMMITTER_NAME="$author_name" GIT_COMMITTER_EMAIL="$author_email" \
-                git commit-tree "$snap_tree" -p "$base" -m "$msg")" \
+                git commit-tree "${sign_flag[@]}" "$snap_tree" -p "$base" -m "$msg")" \
     || dl_die "$DL_MERGE" "failed to re-parent the snapshot onto base ${base:0:12}"
 else
   dl_warn "recorded base ${base:0:12} is not present locally (pruned?); creating an orphan review commit"
   new_commit="$(GIT_AUTHOR_NAME="$author_name"   GIT_AUTHOR_EMAIL="$author_email" \
                 GIT_COMMITTER_NAME="$author_name" GIT_COMMITTER_EMAIL="$author_email" \
-                git commit-tree "$snap_tree" -m "$msg")" \
+                git commit-tree "${sign_flag[@]}" "$snap_tree" -m "$msg")" \
     || dl_die "$DL_MERGE" "failed to create the review commit"
 fi
 
