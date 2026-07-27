@@ -1,0 +1,6 @@
+# Resolve dynamically computed helper sources relative to each script so
+# shellcheck can follow them (the scripts source via a $(cd ...) command
+# substitution it can't evaluate statically; the `# shellcheck source=` hints
+# name the file, this tells shellcheck where to find it).
+external-sources=true
+source-path=SCRIPTDIR

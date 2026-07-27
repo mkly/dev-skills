@@ -1,345 +1,221 @@
 ---
 name: dev-loop
 description: >-
-  Run a development pass that uses dev-loop-task to break a goal into durable
-  Taskwarrior tasks when needed, then claims and executes each one inside an
-  isolated Incus box leased via Crabbox. Ensures one owner per task for agents
-  sharing the same host and dev-loop state directory, and merges each box's
-  changes onto a new LOCAL review branch without pushing or auto-merging. Use
-  when asked to "work through a goal", "split this into tasks and do them",
-  parallelize work across agents, or run changes in a sandboxed/throwaway
-  environment with Taskwarrior + Crabbox + Incus.
+  Drive a development goal to completion by composing dev-create-tasks,
+  dev-implement-task, dev-complete-task, and dev-ask in bounded rounds. Use when
+  asked to work through a goal end to end, split and execute a goal, loop until
+  done, or repeatedly implement and complete review-generated fixes until the
+  exact repository project and loop ID are clean. Stop after five rounds by
+  default.
 ---
 
-# dev-loop
+# Dev Loop
 
-Orchestrate a goal end-to-end: **decompose → claim → work in an isolated box →
-merge back to a local review branch → done.** Taskwarrior stores tasks and
-owner state; a host-wide `flock` serializes claims; Crabbox (Incus provider) is
-the isolated execution box; the per-task git worktree is snapshotted into a new
-local branch for review.
+Compose the task lifecycle without absorbing its responsibilities:
+**create durable tasks -> implement one task -> complete that task -> repeat
+for queued fixes -> prove the goal complete.**
 
-## Load the task-creation component when needed
+## Load the component skills
 
-Before creating any task for a fresh goal, locate and read
-`dev-loop-task/SKILL.md` completely. When the skills are stored as siblings,
-resolve it as `../dev-loop-task`; otherwise locate its installed directory. Use
-its bundled `dlt-create.sh` for every new task. Do not reconstruct task creation
-with `task add` / `+LATEST`. A pass that only consumes an already-decomposed
-project does not need to load this component.
+Before acting, locate and read these files completely:
 
-`dev-loop-task` owns task sizing, acceptance, dependency/input wiring, duplicate
-detection, and atomic UUID capture. Its stop-before-execution boundary applies
-while creating tasks. Because this skill is invoked for implementation, resume
-here with the returned UUIDs and continue to claiming only after task creation
-has finished. If creation is needed and the component is unavailable, stop with
-an environment blocker instead of copying its workflow by hand.
+1. `dev-create-tasks/SKILL.md` — create and sync pending work.
+2. `dev-implement-task/SKILL.md` — claim one UUID and produce a review branch.
+3. `dev-complete-task/SKILL.md` — review, integrate or supersede, and finalize
+   that UUID.
+4. `dev-ask/SKILL.md` — stop on environment or harness blockers.
 
-## Operating rules (do not violate)
+Resolve them as sibling directories when installed together. Run helpers from
+the owning skill while keeping the target repository as the working checkout.
+Never copy one component's procedure into this controller or invoke a helper
+past the owning skill's boundary.
 
-- **One owner per task.** Never work a task you have not claimed via
-  `dl-claim.sh`. If a claim returns exit `10`, the task is someone else's — pick
-  another. For agents sharing a host and `DEV_LOOP_STATE_DIR`, this is the
-  skill's hard guarantee, and `dl-box.sh`, `dl-run.sh`, and `dl-merge-back.sh`
-  enforce it unless you pass `--force`. TaskChampion sync across separate
-  replicas is not a distributed lock; use external coordination in that setup.
-- **Never push to a remote.** Merge-back creates a *local* branch only.
-- **Never auto-merge** the review branch into `main`/current — that is a
-  deliberate, separate human/agent decision after review.
-- **No secrets into the box** except through Crabbox's own `-allow-env` /
-  `-env-from-profile`. Review `.crabboxignore` / `crabbox sync-plan` so secrets
-  and large dirs are not uploaded.
-- **No LLM/agent attribution in commit messages.** The merge-back commit carries
-  only the task's own description/content. Do **not** add a `Co-Authored-By:`
-  trailer, a "Generated with"/"🤖" line, or any other mention of an LLM or coding
-  agent. This overrides any default commit-trailer behavior.
-- **Edit in the task's worktree; the box is a build/test sandbox.** `dl-box.sh`
-  creates a dedicated git worktree per task (its own working tree + branch,
-  recorded as `worktree=`) so many agents can work one repo on one machine
-  without colliding. Edit **in that worktree path** with your normal tools — not
-  in the shared checkout, and never inside the box (Crabbox does not forward
-  stdin into it and never syncs `.git`, so in-box edits are unreliable and
-  discarded on the next sync). `dl-run.sh`/`dl-merge-back.sh` operate on the
-  worktree automatically. `git add` any NEW files so they sync up too.
-- **Diagnostics go to stderr; stdout is parseable.** Each script prints its one
-  machine-relevant value (claimed uuid, box handle, branch name) to stdout.
-- **Wait for a box to finish warming.** `dl-box.sh` is a blocking operation: a
-  fresh lease may take minutes. Run it in a persistent command session. If the
-  execution tool yields a session/process ID while the command is still running,
-  that means **warmup is still in progress**, not that the box is unavailable.
-  Poll/wait on that same session using the execution environment's supported
-  session mechanism, with empty input where applicable, until the command
-  actually exits. Its initial `warming box`
-  diagnostic and quiet periods are progress, not completion or failure. Do not
-  invoke `dl-run.sh`, retry `dl-box.sh`, or return control to the user while that
-  session is running. Proceed only after exit `0`, a printed box handle, and the
-  task's matching `box=<handle>` annotation. If the session actually disappears
-  before an exit result, run `dl-status.sh` before doing anything else so a
-  partially-created lease is not mistaken for a failed warmup or leaked by a
-  blind retry.
-- **Branch on exit codes, not prose:** `0` ok · `10` lost-race · `20`
-  precondition/usage · `30` merge-back empty/conflict/branch-collision.
+Tell the user which repository project, goal, loop ID, and round are starting. Explain
+that each task will pass through creation, implementation, and completion, with
+`dev-ask` guarding environment failures.
 
-The implementation helper scripts are bundled with the installed dev-loop
-skill, not with the target repo; task creation's `dlt-create.sh` belongs to the
-installed dev-loop-task skill. In command examples, `/path/to/dev-loop-skill`
-means the installed directory containing this `SKILL.md`; invoke scripts from
-there while keeping the target repo checkout as the current working directory.
-Do not assume the target repo contains `scripts/dl-*.sh`. The scripts are
-idempotent and re-runnable where that is safe; merge-back exact re-runs of the
-same branch are no-ops, while branch-name collisions still return exit `30`.
-Pass `--dry-run` to any mutating script to preview. Full recipes,
-the env-var table, the exit-code table, and troubleshooting are in
-**reference.md** — read it when a step fails or when you need exact flags.
+## Controller invariants
 
-## Phase 0 — Setup (idempotent, once per machine)
+- Derive the project from the lowercase GitHub `origin` basename. Never ask the
+  user or agent to invent it.
+- Scope controller queries and branch collection by exact project plus exact
+  `loop-id:`. Project alone includes other goals in the repository.
+- Use one stable `DEV_LOOP_OWNER` for the entire run.
+- Never create duplicate tasks when durable state already exists.
+- Never claim a task outside the current project, loop ID, and round.
+- Never treat an implementation branch or a Taskwarrior `done` status alone as
+  goal completion.
+- Never push, overwrite unrelated changes, force-delete unmerged branches, or
+  merge without `dev-complete-task`'s verdict.
+- Preserve component exit-code, synchronization, ownership, box, and cleanup
+  contracts.
+
+## Configure process exit
+
+Persistent-agent launchers may export the agent process ID as `AGENT_PID` and
+an optional notification executable as `AGENT_NOTIFY`:
 
 ```sh
-/path/to/dev-loop-skill/scripts/dl-setup.sh
+sh -c 'export AGENT_PID=$$; exec <agent command>'
 ```
 
-Ensures the `assignee` UDA exists (timestamped backup of the active taskrc when
-one exists), checks for `git jq flock task crabbox` (+ `incus` when that provider
-is active), and gates on `crabbox doctor`. Exit `20` means a precondition failed
-— read the message and fix it before continuing.
+The `exec` preserves the wrapper PID as the agent PID. Do not infer it from
+`$PPID`. `AGENT_NOTIFY` receives an event name and task or loop ID. Component
+stages must not notify or terminate a composed `dev-loop`; only this wrapper
+does so after the complete goal run reaches its final durable state.
 
-**Owner id.** Setup reports the effective `DEV_LOOP_OWNER`. The default fallback is read from a state file if present (generated by `dl-setup.sh` at `~/.config/dev-loop/owner`), falling back to the default `$USER@$host` identity.
+## Define rounds and durable state
 
-The precedence for resolving the owner ID is:
-1. Explicit `DEV_LOOP_OWNER` environment variable.
-2. Persisted state file (`~/.config/dev-loop/owner`).
-3. Dynamic default (`$USER@$host`).
+Use at most five rounds unless the user selects another limit. Round 1 contains
+the initial task set. Findings produced while completing round N become tasks
+for round N+1.
 
-For concurrent multi-agent environments sharing a Unix user, you must export a distinct owner ID. The ID must stay a fixed literal for the entire session (never use a dynamically re-expanded value like `$$` which changes per command and breaks locks):
+```text
+project: <lowercase GitHub origin basename>
+repo-id: github.com/<owner>/<repo>
+goal: <goal-slug>
+loop-id: <uuid>
+loop-round: <n>
+```
+
+Use `dev-create-tasks`' autonomous origin resolver. Normalize the requested goal
+to a lowercase slug. Inspect tasks whose project equals the derived repository
+project and whose `repo-id:` and `goal:` match. Resume the one active loop ID
+represented by pending tasks or surviving review branches. If none exists,
+generate a new UUID. Multiple active loop IDs for the same repository/goal are
+contradictory durable state; stop rather than combine them.
+
+Resume the highest `loop-round:` within that exact loop. Never adopt legacy or
+out-of-band tasks that lack matching repository and loop identity, and never
+reset a loop ID after interruption.
+
+Keep one observable goal-level acceptance statement across every round. Task
+acceptance proves an increment; the controller completes only when the assembled
+integration branch proves the original outcome.
+
+## Start or resume the goal
+
+1. Confirm the current checkout is the intended local integration branch.
+   Preserve unrelated changes; completion requires a clean checkout for merges.
+2. Derive project/repo ID from `origin`, resolve or generate the goal's loop ID,
+   then inspect only matching tasks, branches, claims, worktrees, and leases.
+3. Run `dev-implement-task/scripts/dl-setup.sh` once and establish the stable
+   owner ID.
+4. On a fresh goal, invoke `dev-create-tasks` with the shared `--goal` and
+   `--loop-id` on every initial import. Round defaults to 1. Preserve
+   dependencies and `input:` ancestry, add `--small` only to clearly trivial
+   tasks under that skill's rule, then run the batch-final sync.
+5. On a resumed goal, reconstruct state instead of decomposing the goal again.
+
+## Run one round
+
+### 1. Select ready work
+
+Enumerate pending tasks whose project, `repo-id:`, `goal:`, and `loop-id:` match
+the controller and whose latest `loop-round:` equals the current round. Honor
+dependencies and owners. Pass each selected UUID explicitly to
+`dev-implement-task`, binding the claim with `--goal`, `--loop-id`, and
+`--loop-round`; never use unscoped auto-pick. Standard workers accept only
+untagged tasks, smaller-model workers add `--small`, and larger-model workers
+add `--large`. While both tags exist, `+LARGE` takes precedence.
+
+If tasks remain but none is ready, inspect dependencies, owners, and preserved
+branches. Stop with the exact invariant when no safe progress is possible.
+
+### 2. Implement one task
+
+Invoke `dev-implement-task` for the selected UUID. Require it to return:
+
+- an active, still-pending producer owned by this controller;
+- a resolving local `branch=` and recorded commit range;
+- a durable implementation summary; and
+- acceptance checks that passed in the box.
+
+Do not select another task until this task reaches a completion disposition or
+has been durably tagged `+LARGE`, synchronized, and released for a larger-model
+worker. When that worker records `escalation-result:`, removes `+LARGE`, and
+releases it, an untagged task returns to the standard queue and a retained
+`+SMALL` task returns to the small queue without another marker.
+
+### 3. Complete the task
+
+Invoke `dev-complete-task` immediately for the returned UUID, with one exception
+for deliberate stacked chains: when an already-created consumer depends on the
+producer and names its review branch as `input:`, complete the producer as a
+verified stacked increment, keep its branch, and let the consumer become ready.
+The eventual chain tip must be reviewed against end-to-end acceptance; merging
+the tip lands the ancestor increments, after which completion cleans their
+already-merged branches.
+
+For an ordinary task, let `dev-complete-task` produce one of two outcomes:
+
+- `merged`: acceptance is demonstrated, the branch is integrated and deleted,
+  the producer is completed, and resources are cleaned.
+- `superseded`: findings are captured as durable round N+1 tasks rooted on the
+  preserved review branch, then the producer is completed and cleaned.
+
+After either outcome, verify Taskwarrior sync and reconcile status. Never leave
+an active producer behind before moving to another task.
+
+### 4. Drain and reconcile
+
+Repeat selection, implementation, and completion until no task in the current
+round is ready. Clean any surviving ancestor review branches that became merged
+when a chain tip landed. Confirm no current-round task remains active.
+
+Snapshot pending UUIDs before and after the round. Validate every new finding
+task:
+
+- exact project, `repo-id:`, `goal:`, and `loop-id:` match;
+- `loop-round: <current + 1>`;
+- `acceptance:`, `input:`, and `review-of:` annotations; and
+- correct dependency and branch ancestry.
+
+Treat inability to prove the goal-level outcome as a finding and create a
+verification or integration task through `dev-create-tasks`.
+
+## Decide whether to continue
+
+Declare success only when all of these are true:
+
+- no pending, waiting, or active task remains in the exact project/loop ID;
+- no matching loop review branch remains after merged-ancestor cleanup;
+- every completion verdict has been acted on and synchronized;
+- no matching task claim, worktree, or lease leak remains; and
+- the assembled integration branch demonstrates the original goal acceptance.
+
+If next-round tasks exist and the round limit is not reached, increment the
+round and continue without re-decomposing the goal.
+
+If the final allowed round creates more work, leave the tasks pending and
+unclaimed, preserve their input branches, and report the recurring findings.
+Ask whether to authorize another round or change approach.
+
+## Stop and report
+
+Apply `dev-ask`'s two-strike rule immediately to environment, harness, box,
+permission, credential, or tooling failures. An environment stop preserves the
+current round and does not consume another one.
+
+On success, report the repository project, repo ID, goal, loop ID, rounds used,
+tasks created/implemented/completed, branches merged, checks run, goal evidence,
+and integration HEAD. State that no matching tasks, review branches, claims,
+worktrees, or leases remain.
+
+On any stop, report the same durable state plus the exact blocker, current
+round, preserved artifacts, and smallest decision needed to continue.
+
+After the final durable check, notify first and then terminate. Make these the
+last commands attempted:
 
 ```sh
-export DEV_LOOP_OWNER="$USER@$(hostname -s)/agent-unique-name"
+if [ -n "${AGENT_NOTIFY:-}" ]; then
+  "$AGENT_NOTIFY" goal-completed "$loop_id" || true
+fi
+if [ -n "${AGENT_PID:-}" ]; then
+  kill -TERM "$AGENT_PID"
+fi
 ```
 
-## Phase 1 — Goal → tasks
-
-First inspect Taskwarrior for an existing project/task set that already captures
-the goal. Resolve the project as the fully qualified `<repo>.<goal>` hierarchy
-defined by dev-loop-task: the stable repo/project namespace first, then the goal
-slug. Resume that exact leaf when present; never decompose the same goal twice,
-and never create this work under a bare goal slug. The repo root is available
-for repo-wide Taskwarrior queries, while this pass remains scoped to the exact
-goal project.
-
-For a fresh goal, follow dev-loop-task completely and create every task through
-its atomic helper. Capture each returned UUID. For example:
-
-```sh
-/path/to/dev-loop-task-skill/scripts/dlt-create.sh \
-  --project <repo-slug>.<goal-slug> \
-  --description "implement X" \
-  --acceptance "<observable proof that X is done>"
-```
-
-Use `--depends` plus `--input` for consumers, chain overlapping work, and put an
-end-to-end acceptance criterion on every chain tip as dev-loop-task requires.
-When a controller such as dev-loop-complete supplies extra metadata, pass it to
-the same creation call so the task is complete at import time.
-
-After the entire batch is created, run dev-loop-task's required final
-`task rc.confirmation=no sync`. Only then list the resulting project and verify
-all tasks are pending and unassigned. Continue to Phase 2 after that boundary;
-the direct dev-loop-task stopping rule does not end this broader, explicitly
-authorized implementation pass.
-
-## Phase 2 — Claim (the lock)
-
-```sh
-uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh <uuid>)"   # goal-scoped pass: claim a verified project task
-# or: uuid="$(/path/to/dev-loop-skill/scripts/dl-claim.sh)"    # explicitly unscoped queue pass only
-```
-
-`dl-claim.sh` acquires an OS `flock` around the multi-command claim sequence,
-writes a nonce-bearing `assignee`, reads it back for verification, and then
-`task start`s the task. Taskwarrior 3 serializes each command through its
-TaskChampion/SQLite store; the `flock` keeps the complete sequence exclusive
-among dev-loop agents sharing the host and `DEV_LOOP_STATE_DIR`.
-
-- **Auto-pick with nothing claimable** → exit `0`, empty stdout. Stop and report
-  "no ready tasks".
-- For a named goal, enumerate tasks by exact fully qualified project and pass
-  each selected UUID explicitly. Do not let an unscoped auto-pick cross into a
-  different repo or goal. Use auto-pick only when the requested pass explicitly
-  covers the general dev-loop queue.
-- **Specific task owned by another** → exit `10`. Do not work it; choose another.
-- Re-claiming your own task is a no-op (idempotent).
-- A crashed owner's task is only reclaimable with `--steal-after <dur>` (e.g.
-  `--steal-after 4h`); the takeover is annotated. Never steal silently.
-
-Always capture the uuid from stdout and use it for every subsequent phase.
-
-## Phase 3 — Work in the box (one lease per task)
-
-```sh
-/path/to/dev-loop-skill/scripts/dl-box.sh "$uuid"                          # warm or reuse the task's box
-/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" -- bash -lc 'make build' # run a command in it
-/path/to/dev-loop-skill/scripts/dl-run.sh "$uuid" --compact -- bash -lc 'pytest -q'  # compact when in-box RTK exists
-```
-
-For a fresh lease, keep the `dl-box.sh` command alive until it exits. The
-`warming box` line only means provisioning has begun; success is the printed
-handle plus the task's `box=` annotation. Use this mandatory wait protocol:
-
-1. Start `dl-box.sh` once in a persistent execution session.
-2. If the tool reports `process running`, `session ID`, or an equivalent early
-   yield, wait/poll that exact session again using the execution environment's
-   supported session mechanism; do not start another command.
-3. Repeat step 2 through quiet/no-output intervals until the session reports a
-   real exit code. A yielded call has no exit code and is never a failure.
-4. On exit `0`, capture the handle and continue. On a nonzero exit, follow the
-   exit-code contract. Only if the session itself is lost, reconcile with
-   `dl-status.sh` before deciding whether to retry.
-
-Never conclude “the container is not up yet” and stop: “not up yet” means the
-current action is to keep waiting on the existing warmup session.
-
-- `dl-box.sh` sets up two things per task: (1) a dedicated **git worktree** on a
-  scratch branch `dl/<slug>` rooted at `--base <ref>`, else the task's latest
-  `input:` branch, else current HEAD, placed outside the repo under
-  `$DEV_LOOP_WORKTREE_DIR/<repo>/<slug>` and recorded as `worktree=<path>`;
-  and (2) exactly one Incus lease (reuses the live one if the `box=` annotation
-  still resolves). It records `box=<handle>`, `base=<resolved sha>` (the
-  merge-back diff base), and `worktree=<path>`, and prints the handle. The
-  worktree gives
-  each task its own isolated working tree + branch, so many agents can work the
-  same repo on one machine without stepping on each other.
-- **Edit in the task's worktree** (`worktree=<path>`) with your normal tools (your
-  editor / file tools) — not in the shared checkout. `dl-run.sh` cd's into that
-  worktree, syncs it **up on every run** (the worktree is the source of truth),
-  and forwards the in-box command's exit code verbatim. The box is for building
-  and testing only — never edit inside it.
-- **Scope test runs to the change.** While iterating, run the tests named by the
-  task's acceptance criteria (or covering the touched files), not the full
-  suite. Run the broader suite at most once, right before merge-back, and only
-  when the change could plausibly affect code outside its own slice — a
-  prompt-text or doc change does not need 400 unrelated tests re-proven.
-- Pass `--compact` for verbose routine build, test, or lint output. The wrapper
-  uses in-box `rtk test` when available and otherwise warns and runs the exact
-  command unfiltered. Omit it when diagnosing a failure requires raw output.
-- Crabbox syncs only git-**tracked** files, so box-generated build artifacts
-  survive a sync, but **NEW files you create must be `git add`-ed to reach the
-  box** (merge-back snapshots the whole worktree, so it picks up untracked
-  non-ignored files regardless — but the box won't see them until tracked). Pass
-  `--no-sync` for a fast re-run when nothing changed locally.
-
-## Phase 4 — Merge back to a NEW local branch
-
-```sh
-branch="$(/path/to/dev-loop-skill/scripts/dl-merge-back.sh "$uuid")"        # default: review/<slug>
-# or: /path/to/dev-loop-skill/scripts/dl-merge-back.sh "$uuid" review/my-name
-```
-
-Merge-back is a purely **local** git operation on the task's worktree — no box
-round-trip. The worktree (rooted at `base`) is the source of truth: the agent
-edits there and the box is build/test only. Merge-back stages the worktree's
-whole working tree into a throwaway index, writes that tree, and **re-parents it
-onto `base`** (`git commit-tree -p base`) as one commit, so the review branch is
-a clean increment whose `base..branch` diff is exactly the task's changes.
-Gitignored build artifacts are excluded; newly created files are included
-automatically (no `git add` needed for merge-back). Prints the branch name;
-records `branch=` on the task.
-
-- Exit `30` = nothing to merge (worktree identical to base) / branch already
-  exists → report it; pass an explicit `<branch>` to resolve a name collision.
-- Exit `20` = no recorded base/worktree, or the worktree dir is missing → run
-  `/path/to/dev-loop-skill/scripts/dl-box.sh "$uuid"` first (or to recreate
-  a pruned worktree).
-- It does **not** merge the branch. Show the user `git log --oneline base..branch`
-  and `git diff --stat` (the script prints both) and let them review and merge.
-- It records a `commits=<base>..<head> (n=N)` annotation so the produced commits
-  stay linked to the task even if the branch is later merged, renamed, or deleted.
-
-## Phase 5 — Done & cleanup
-
-```sh
-# Record what was done before completing — a durable, human-readable note on the
-# task itself (commits are already linked by merge-back's commits= annotation):
-task "$uuid" annotate "summary: <what changed and why, in 1–2 lines>"
-/path/to/dev-loop-skill/scripts/dl-done.sh "$uuid"        # task done + park box for reuse + annotate
-```
-
-Annotations are Taskwarrior's note mechanism — timestamped freeform text on a
-task, preserved after completion. Use a `summary:` annotation to capture *what
-was done* (and any follow-ups/caveats); the box, base, branch, and commit range
-are already recorded automatically. This keeps the completed task self-describing
-for later review via `task <uuid> info`.
-
-`task done` drops the task from pending (releasing the claim); the live box is
-parked for the next task unless `--stop-box`, and the task's worktree + scratch
-branch `dl/<slug>` are removed unless `--keep-worktree`. The
-`review/<slug>` branch is shared in the repo and is always KEPT for review.
-If the worktree differs from `base=` and no `branch=` was recorded, `dl-done.sh`
-exits `20` and leaves the worktree in place; run `dl-merge-back.sh "$uuid"` first
-or pass `--force` / `--keep-worktree` intentionally.
-
-- **Abandon instead of complete:** `/path/to/dev-loop-skill/scripts/dl-release.sh "$uuid" [--stop-box]`
-  stops the task and clears `assignee` so another owner can claim it; the task
-  stays pending. Its live box is parked for reuse unless `--stop-box`.
-- **Reconcile:** `/path/to/dev-loop-skill/scripts/dl-status.sh` (read-only) lists active claims with
-  owner + age + `[STALE]`, live Crabbox leases, **orphan** leases (running but no
-  pending task references them), dangling box refs, per-task worktrees (flagging
-  ORPHAN worktrees left by completed/released tasks and MISSING ones a pending
-  task still records), and a **Review branches** section — the pipeline's
-  *output*. The latter reverse-maps every `branch=` annotation (across ALL tasks,
-  including completed) and every `refs/heads/review/*` branch to its producing
-  task, and reports merge state vs the current checkout: `MERGED` (tip is an
-  ancestor of HEAD → reviewed/landed, safe to `git branch -d`), `unmerged
-  (+N)` (awaiting review), `ORPHAN` (a review branch no task records), and `GONE`
-  (a task recorded a branch that no longer exists — merged + deleted). Run it to
-  find leaks or stuck claims **and to answer "what's still waiting to merge"**,
-  then act with `dl-release.sh` / `dl-done.sh` / `crabbox stop` /
-  `git worktree prune`.
-
-## Loop
-
-Repeat Phases 2–5 per task, honoring dependencies (claim only `+READY` tasks).
-
-**Keep per-task ceremony proportional.** The safety rules (claim before work,
-edit in the worktree, merge back locally, record `summary:`) are fixed; the
-deliberation is not. For a small task, read its annotations, make the change,
-run its acceptance tests, and merge back — do not re-run `dl-setup.sh`, re-read
-reference.md, or re-survey `dl-status.sh` on every iteration when nothing has
-gone wrong. `dl-status.sh` is for reconciling after a failure or at the end of
-the loop, not a per-task ritual.
-
-When the exact goal project's `+READY` query returns no tasks, its ready work is
-done. (For an explicitly unscoped queue pass, the equivalent boundary is an
-empty auto-pick.) Run `/path/to/dev-loop-skill/scripts/dl-status.sh` to confirm
-no orphan leases remain, then report what landed on which review branches.
-
-**After a review branch is merged,** prompt the user to delete it:
-
-```sh
-git branch -d <branch>   # safe: -d refuses if branch isn't fully merged
-```
-
-Present this as a one-liner the user can run (or confirm you should run). Do not
-delete automatically — branch deletion is a destructive action that requires
-explicit human approval.
-
-**Use automatic context compaction (prevent context rot).** Run long loops with
-the host agent/runtime configured to compact after roughly 64k tokens of context
-growth. If supported, count only growth after the persistent system/skill
-instruction prefix so that prefix does not immediately consume the threshold.
-Use 32–48k only when stale context remains a problem. Configuration names and
-when changes take effect vary by agent; keep vendor-specific settings out of
-this skill. Automatic compaction is token-driven and may occur during a task or
-after several tasks, not specifically after Phase 5. If the host cannot
-configure or trigger compaction, continue using the durable-state discipline
-below and do not claim that boundary compaction occurred.
-
-At every task boundary, keep the logical workflow near-stateless anyway: record
-the Phase 5 `summary:`, then reconstruct the next task from `task <uuid> export`
-and `dl-status.sh` rather than relying on remembered build/test/debug churn.
-Per-task state is durable in Taskwarrior annotations (`box=`, `base=`,
-`worktree=`, `branch=`, `commits=`), so periodic automatic compaction can safely
-discard transient details. Treat each task as: claim → reconstruct from
-annotations → work → merge-back → done → record durable state.
-
-Do not re-document Crabbox here — defer to `crabbox <cmd> --help` and the
-crabbox-generated skill at `.agents/skills/crabbox/` when present.
+Notification is best-effort and must not strand the worker. If `AGENT_PID` is
+absent, provide the report above and end the turn normally.
