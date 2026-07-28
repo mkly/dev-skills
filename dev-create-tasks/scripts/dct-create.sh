@@ -148,7 +148,7 @@ for value in "${EXTRA_ANNOTATIONS[@]}"; do
   [[ "$value" =~ [^[:space:]] ]] || dct_die "$DCT_PRECOND" "annotations may not be blank"
   reject_multiline "annotation" "$value"
   case "$value" in
-    "repo-id:"*|"goal:"*|"loop-id:"*|"loop-round:"*)
+    "repo-id:"*|"goal:"*|"loop-id:"*|"loop-round:"*|"plan:"*)
       dct_die "$DCT_PRECOND" "identity annotations are reserved; use the corresponding option"
       ;;
   esac

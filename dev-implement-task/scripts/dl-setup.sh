@@ -80,6 +80,26 @@ else
   dl_log "configured assignee UDA"
 fi
 
+# 2b. plan UDA (check-before-write; same taskrc as the assignee UDA above).
+current_plan_type="$(task _get rc.uda.plan.type 2>/dev/null || true)"
+if [ "$current_plan_type" = "string" ]; then
+  dl_log "plan UDA already configured"
+else
+  if [ -f "$TASKRC_FILE" ]; then
+    backup="${TASKRC_FILE}.dev-loop-bak-$(date +%Y%m%dT%H%M%S)"
+    dl_do cp -p "$TASKRC_FILE" "$backup"
+    dl_log "backed up taskrc -> $backup"
+  else
+    dl_warn "taskrc not found at $TASKRC_FILE; task config will create it"
+  fi
+  dl_do dl_task config uda.plan.type string
+  dl_do dl_task config uda.plan.label Plan
+  if [ -z "$DL_DRY_RUN" ] && [ "$(task _get rc.uda.plan.type 2>/dev/null || true)" != "string" ]; then
+    dl_die "$DL_PRECOND" "failed to configure plan UDA in $TASKRC_FILE"
+  fi
+  dl_log "configured plan UDA"
+fi
+
 # 3. Provider readiness gate.
 if [ -n "$DL_DRY_RUN" ]; then
   dl_log "DRY-RUN: skipping 'crabbox doctor -provider $CRABBOX_PROVIDER'"

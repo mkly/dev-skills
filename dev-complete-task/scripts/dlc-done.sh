@@ -99,6 +99,7 @@ case "$OUTCOME" in
       || dl_die "$DL_PRECOND" "recorded implementation head '$head' does not resolve"
     git merge-base --is-ancestor "$head" HEAD >/dev/null 2>&1 \
       || dl_die "$DL_PRECOND" "recorded implementation head '$head' is not integrated into current HEAD"
+    dl_plan_clear "$UUID"
     ;;
   stacked|superseded)
     [ -n "$branch" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded review branch to preserve"

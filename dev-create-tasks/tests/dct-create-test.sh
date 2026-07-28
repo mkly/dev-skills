@@ -96,6 +96,22 @@ task_json "$created" | jq -e --arg dependency "$dependency" --arg loop_id "$PARS
   ] | sort)
 ' >/dev/null || fail "created task metadata did not match"
 
+# plan: is reserved like the other identity annotations: dl_plan_get's
+# producer hop depends on it never being overridable from task creation.
+set +e
+plan_reject_err="$(
+  $CREATE --goal parser --loop-id "$PARSER_LOOP" \
+    --description 'reject reserved plan annotation' \
+    --acceptance 'must not import' \
+    --annotation 'plan: some-producer-uuid' 2>&1 1>"$TMP/plan-reject.out"
+)"
+plan_reject_rc=$?
+set -e
+[ "$plan_reject_rc" -eq 20 ] || fail "reserved plan: annotation exited $plan_reject_rc"
+[ ! -s "$TMP/plan-reject.out" ] || fail "reserved plan: annotation wrote stdout"
+printf '%s' "$plan_reject_err" | grep -Fq "identity annotations are reserved" \
+  || fail "reserved plan: annotation was not diagnosed: $plan_reject_err"
+
 before="$(task rc.context=none rc.verbose=nothing status:pending count)"
 dry_json="$($CREATE --json --dry-run \
   --goal dry-run --loop-id 22222222-2222-4222-8222-222222222222 \

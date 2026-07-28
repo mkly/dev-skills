@@ -30,6 +30,7 @@ Keep the target repository's integration checkout as the current directory.
 | `goal: ...` | human-readable goal slug |
 | `loop-id: ...` | exact controller-run UUID |
 | `loop-round: <n>` | wrapper round |
+| `plan: <producer-uuid>` | hop to a producer's `plan` UDA when this task carries none of its own |
 
 Completion writes:
 
@@ -38,6 +39,9 @@ Completion writes:
 | `dev-complete-task: merged ...` | audit note from `dlc-merge.sh` |
 | `dev-loop: completed outcome=<value> ...` | terminal lifecycle event from `dlc-done.sh` |
 | `review-of: <short> <branch>` | follow-up task points to its reviewed producer |
+
+`dlc-done.sh` clears the `plan` UDA on `--outcome merged` only; `stacked` and
+`superseded` keep it so a preserved review branch's successor can still read it.
 
 Keep machine annotations stable for compatibility with tasks created by the
 former skill layout.

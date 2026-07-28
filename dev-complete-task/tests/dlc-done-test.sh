@@ -36,6 +36,9 @@ case "$cmd" in
   annotate)
     printf 'annotate\t%s\n' "${3:-}" >>"$MOCK_TASK_LOG"
     ;;
+  modify)
+    printf 'modify\t%s\n' "${3:-}" >>"$MOCK_TASK_LOG"
+    ;;
   done)
     printf 'completed\n' >"$MOCK_STATUS"
     printf 'done\n' >>"$MOCK_TASK_LOG"
@@ -92,6 +95,8 @@ set -e
 grep -Fq 'completed outcome=merged' "$TMP/task.log" \
   || fail "merged outcome annotation was not recorded"
 grep -Fxq 'done' "$TMP/task.log" || fail "task done was not invoked"
+grep -Fxq $'modify\tplan:' "$TMP/task.log" \
+  || fail "merged outcome did not clear the plan UDA"
 
 printf 'pending\n' >"$TMP/status"
 : >"$TMP/task.log"
@@ -101,6 +106,8 @@ grep -Fq 'completed outcome=stacked' "$TMP/task.log" \
   || fail "stacked outcome annotation was not recorded"
 git show-ref --verify --quiet refs/heads/review/fixture \
   || fail "stacked outcome removed the preserved branch"
+grep -Fq $'modify\tplan:' "$TMP/task.log" \
+  && fail "stacked outcome should not clear the plan UDA"
 
 printf 'pending\n' >"$TMP/status"
 : >"$TMP/task.log"

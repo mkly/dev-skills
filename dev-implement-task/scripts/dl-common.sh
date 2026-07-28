@@ -201,6 +201,63 @@ dl_anno_event() {
 }
 
 # ---------------------------------------------------------------------------
+# Plan artifact storage — a markdown planning file carried on a task as the
+# `plan` UDA (gzip+base64, single line) so it survives task sync without a
+# side channel. A task with no plan of its own can point at a producer's via
+# a "plan: <producer-uuid>" annotation; dl_plan_get follows exactly one such
+# hop, so chains never grow unbounded lookups.
+# ---------------------------------------------------------------------------
+DL_PLAN_MAX_BYTES=16384
+
+# dl_plan_put <uuid> <file> — gzip+base64 encode <file> into the plan UDA.
+# Fails (20) rather than truncating when the raw file exceeds the cap.
+dl_plan_put() {
+  local uuid="$1" file="$2" size encoded
+  [ -f "$file" ] || dl_die "$DL_PRECOND" "plan file not found: $file"
+  size="$(wc -c <"$file" | tr -d '[:space:]')"
+  if [ "$size" -gt "$DL_PLAN_MAX_BYTES" ]; then
+    dl_die "$DL_PRECOND" "plan file exceeds ${DL_PLAN_MAX_BYTES} bytes (got $size): $file"
+  fi
+  encoded="$(gzip -c "$file" | base64 -w0)"
+  dl_do dl_task "$uuid" modify "plan:${encoded}"
+}
+
+# dl_plan_get <uuid> — write the original markdown to stdout for a task that
+# carries a plan UDA. When the UDA is empty, follows the latest
+# "plan: <producer-uuid>" annotation to that producer's own plan UDA (one hop
+# only — a producer's own hop annotation, if any, is not followed further).
+# Prints nothing and exits 0 when neither resolves.
+#
+# The hop annotation is read as free-form annotation text ("plan:" prefix,
+# matching the goal:/repo-id:/input: convention), never as the `plan` UDA
+# itself — Taskwarrior's parser treats any bare "plan:value" CLI token as a
+# UDA assignment once `plan` is a registered attribute, so a writer of this
+# annotation must pass it after a literal `--` (e.g. `annotate -- "plan: <uuid>"`).
+dl_plan_get() {
+  local uuid="$1" encoded producer
+  encoded="$(dl_task_field "$uuid" '.plan // ""')"
+  if [ -z "$encoded" ]; then
+    producer="$(dl_task_export "$uuid" | jq -r '
+        (.[0].annotations // [])
+        | map(.description)
+        | map(select(startswith("plan:")))
+        | last // ""
+        | if . == "" then "" else sub("^plan:\\s*"; "") end
+      ' 2>/dev/null)"
+    [ -n "$producer" ] || return 0
+    encoded="$(dl_task_field "$producer" '.plan // ""')"
+    [ -n "$encoded" ] || return 0
+  fi
+  printf '%s' "$encoded" | base64 -d | gzip -dc
+}
+
+# dl_plan_clear <uuid> — remove the plan UDA.
+dl_plan_clear() {
+  local uuid="$1"
+  dl_do dl_task "$uuid" modify plan:
+}
+
+# ---------------------------------------------------------------------------
 # Time helpers.
 # ---------------------------------------------------------------------------
 # dl_dur_to_secs <dur> — parse 90s / 30m / 2h / 1d / 2h30m → seconds on stdout.
