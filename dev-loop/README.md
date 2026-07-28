@@ -15,6 +15,10 @@ dev-create-tasks → dev-implement-task → dev-complete-task
 - `dev-loop` composes those stages in bounded rounds.
 - `dev-ask` remains the independent environment-blocker stop policy.
 
+For end-to-end runs, the controller uses sibling scripts directly instead of
+loading every component skill body. `dev-loop/scripts/dl-loop-state.sh` provides
+read-only goal/round state as compact JSON.
+
 No stage pushes to a remote. Only completion merges into the current local
 integration branch.
 
@@ -79,7 +83,8 @@ sh -c 'export AGENT_PID=$$; exec <agent command>'
 
 After a standalone task worker reaches its final synchronized handoff, it calls
 `AGENT_NOTIFY` with an event and task or loop ID, ignores notification failure,
-and then runs `kill -TERM "$AGENT_PID"`. Events are `tasks-created`,
+and then runs `kill -TERM "$AGENT_PID"`. The shared
+`dev-loop/scripts/dl-finish.sh` helper implements this sequence. Events are `tasks-created`,
 `task-implemented`, `task-escalated`, `task-returned`, `task-completed`,
 `goal-completed`, and `worker-idle`.
 
