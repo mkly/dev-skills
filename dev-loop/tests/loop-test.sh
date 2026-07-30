@@ -81,6 +81,9 @@ grep -Fq -- 'unknown argument: --wat' "$TMP/validation.err" \
 expect_2 --agent codex --implement-task --complete-task
 grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
   || fail "conflicting stage flags were not diagnosed"
+expect_2 --agent codex --small --no-small
+grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
+  || fail "conflicting scope flags were not diagnosed"
 
 clear_case
 printf '0\n' >"$TASK_COUNTS"
@@ -157,6 +160,14 @@ grep -Fq 'Only discover and process pending tasks tagged +SMALL' "$AGENT_LOG" \
   || fail "--small did not constrain the agent prompt"
 grep -Fq 'review-ready pending +SMALL tasks' "$AGENT_LOG" \
   || fail "--small completion prompt described the wrong queue"
+
+check_agent codex '--yolo ' loop \
+  'rc.verbose=nothing status:pending -SMALL count' \
+  'Process each existing goal and loop separately' --no-small
+grep -Fq 'Only discover and process pending tasks that are not tagged +SMALL' "$AGENT_LOG" \
+  || fail "--no-small did not constrain the agent prompt"
+grep -Fq 'Drain the existing pending tasks without +SMALL' "$AGENT_LOG" \
+  || fail "--no-small prompt described the wrong queue"
 
 clear_case
 printf '0\n' >"$TASK_COUNTS"
