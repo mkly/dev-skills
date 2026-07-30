@@ -6,11 +6,13 @@ usage() {
   cat <<'EOF'
 Usage: loop --agent <codex|claude|agy> [--small|--no-small]
             [--implement-task|--complete-task]
+            [--model <model>] [--effort <effort>]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 Use --small to consider only pending tasks tagged +SMALL.
 Use --no-small to consider only pending tasks without the +SMALL tag.
 Use --implement-task or --complete-task to run only that lifecycle stage.
+Use --model and --effort to override the selected agent's defaults.
 EOF
 }
 
@@ -19,6 +21,8 @@ small_only=false
 no_small=false
 implement_only=false
 complete_only=false
+model=""
+effort=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -46,6 +50,20 @@ while [ "$#" -gt 0 ]; do
     --complete-task)
       complete_only=true
       shift
+      ;;
+    --model|--effort)
+      option="$1"
+      if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
+        printf 'loop: %s requires a value\n' "$option" >&2
+        usage >&2
+        exit 2
+      fi
+      if [ "$option" = "--model" ]; then
+        model="$2"
+      else
+        effort="$2"
+      fi
+      shift 2
       ;;
     -h|--help)
       usage
@@ -125,18 +143,34 @@ eligible_count() {
 }
 
 run_agent() {
+  local agent_args=()
+
+  if [ -n "$model" ]; then
+    agent_args+=(--model "$model")
+  fi
+
   case "$agent" in
     codex)
+      if [ -n "$effort" ]; then
+        agent_args+=(--config "model_reasoning_effort=$effort")
+      fi
       bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
-        codex --yolo "$prompt"
+        codex --yolo "${agent_args[@]}" "$prompt"
       ;;
     claude)
+      if [ -n "$effort" ]; then
+        agent_args+=(--effort "$effort")
+      fi
       bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
-        claude --dangerously-skip-permissions "$prompt"
+        claude --dangerously-skip-permissions "${agent_args[@]}" "$prompt"
       ;;
     agy)
+      if [ -n "$effort" ]; then
+        agent_args+=(--effort "$effort")
+      fi
       bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
-        agy --dangerously-skip-permissions --prompt-interactive "$prompt"
+        agy --dangerously-skip-permissions "${agent_args[@]}" \
+          --prompt-interactive "$prompt"
       ;;
   esac
 }
