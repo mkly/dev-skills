@@ -5,14 +5,18 @@ set -u
 usage() {
   cat <<'EOF'
 Usage: check.sh --agent <codex|claude|agy> [--small]
+                [--implement-task|--complete-task]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 Use --small to consider only pending tasks tagged +SMALL.
+Use --implement-task or --complete-task to run only that lifecycle stage.
 EOF
 }
 
 agent=""
 small_only=false
+implement_only=false
+complete_only=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -29,6 +33,14 @@ while [ "$#" -gt 0 ]; do
       small_only=true
       shift
       ;;
+    --implement-task)
+      implement_only=true
+      shift
+      ;;
+    --complete-task)
+      complete_only=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -40,6 +52,12 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if "$implement_only" && "$complete_only"; then
+  printf 'check.sh: --implement-task and --complete-task are mutually exclusive\n' >&2
+  usage >&2
+  exit 2
+fi
 
 case "$agent" in
   codex|claude|agy) ;;
@@ -62,10 +80,33 @@ agent_scope="Process pending tasks regardless of whether they have the +SMALL ta
 if "$small_only"; then
   task_filter+=(+SMALL)
   task_scope="pending +SMALL tasks"
-  agent_scope="Only claim and process pending tasks tagged +SMALL; leave every other task untouched."
+  agent_scope="Only discover and process pending tasks tagged +SMALL; leave every other task untouched."
 fi
 
-prompt="/skills dev-loop Drain the existing ${task_scope} for this repository. Inspect matching pending Taskwarrior tasks first and use each task's existing goal and loop-id annotations; do not derive a new goal from this prompt. Process each existing goal and loop separately until no matching task remains. ${agent_scope} Exit if no matching pending task exists."
+if "$implement_only"; then
+  task_filter=(+READY -ACTIVE "${task_filter[@]}")
+  task_scope="claimable ${task_scope}"
+  prompt="/skills dev-implement-task Implement one existing eligible task from the ${task_scope} for this repository through local review-branch creation only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not review, merge, or complete the task. Exit if no matching claimable task exists."
+elif "$complete_only"; then
+  task_filter=(+ACTIVE "${task_filter[@]}")
+  task_scope="review-ready ${task_scope}"
+  prompt="/skills dev-complete-task Complete one existing implemented task from the ${task_scope} for this repository through review and final disposition only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations, including its branch annotation; do not derive a new goal from this prompt. ${agent_scope} Do not claim or implement unrelated pending work. Exit if no matching review-ready task exists."
+else
+  prompt="/skills dev-loop Drain the existing ${task_scope} for this repository. Inspect matching pending Taskwarrior tasks first and use each task's existing goal and loop-id annotations; do not derive a new goal from this prompt. Process each existing goal and loop separately until no matching task remains. ${agent_scope} Exit if no matching pending task exists."
+fi
+
+eligible_count() {
+  if "$complete_only"; then
+    task rc.verbose=nothing "${task_filter[@]}" export | jq '
+      [ .[]
+        | select(any(.annotations[]?; .description | startswith("branch=")))
+        | select(any(.annotations[]?; .description | startswith("summary: ")))
+      ] | length
+    '
+  else
+    task rc.verbose=nothing "${task_filter[@]}" count
+  fi
+}
 
 run_agent() {
   case "$agent" in
@@ -85,7 +126,7 @@ run_agent() {
 }
 
 while true; do
-  pending_count="$(task rc.verbose=nothing "${task_filter[@]}" count)"
+  pending_count="$(eligible_count)"
 
   if [ "$pending_count" -eq 0 ]; then
     printf 'No %s. Checking again in 5 seconds...\n' "$task_scope"
