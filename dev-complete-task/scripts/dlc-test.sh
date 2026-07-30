@@ -7,7 +7,8 @@
 #
 # This helper deliberately never mutates or reuses the producer's implementation
 # box. Its lease is keyed on the BRANCH itself via a deterministic slug —
-# never on a Taskwarrior uuid, no claim, no task write. Checks the branch out
+# never on a Taskwarrior uuid and never mutates task state. The caller must own
+# the producer's separate reviewer claim before this helper checks the branch out
 # into a dedicated worktree OUTSIDE the repo (reused across calls for the same
 # branch), warms (or reuses) a short-lived Crabbox lease from that worktree,
 # runs the given command in the box, and forwards its exit code VERBATIM.
@@ -60,10 +61,11 @@ done
 [ -n "$BRANCH" ] || { usage; dlc_die "$DLC_PRECOND" "review branch name required"; }
 [ "${#CMD[@]}" -gt 0 ] || { usage; dlc_die "$DLC_PRECOND" "no command given (expected '<branch> -- <cmd>')"; }
 
-dlc_require git jq crabbox
+dlc_require task git jq crabbox
 dlc_in_git_repo
 git rev-parse --verify --quiet "refs/heads/${BRANCH}" >/dev/null \
   || dlc_die "$DLC_MISSING" "review branch '${BRANCH}' is not present locally"
+dlc_require_branch_reviewer "$BRANCH"
 
 slug="$(dlc_slug_for_branch "$BRANCH")"
 wt="$(dlc_worktree_dir_for "$slug")"

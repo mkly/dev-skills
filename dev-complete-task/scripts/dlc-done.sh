@@ -7,9 +7,9 @@
 # Parks the task's live crabbox lease for the next task (or explicitly stops it),
 # removes the task's per-task git worktree and its scratch branch dl/<slug> (the
 # review/<slug> branch is KEPT), marks the task done (which drops it from pending
-# and releases the claim), and records a lifecycle annotation. Any worker may
-# complete any review-ready task; a task implemented by another owner is
-# annotated as a handoff rather than refused.
+# and releases both claims), and records a lifecycle annotation. Any worker may
+# first acquire the separate reviewer claim; a task implemented by another owner
+# is annotated as a handoff rather than refused.
 #
 # Exit: 0 ok, 20 precondition.
 set -euo pipefail
@@ -23,6 +23,8 @@ IMPL_SKILL_DIR="${DEV_IMPLEMENT_TASK_SKILL_DIR:-$(cd "$SCRIPT_DIR/../../dev-impl
 }
 # shellcheck source=../../dev-implement-task/scripts/dl-common.sh
 . "$IMPL_SKILL_DIR/scripts/dl-common.sh"
+# shellcheck source=dlc-common.sh
+. "$SCRIPT_DIR/dlc-common.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -70,14 +72,21 @@ dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 
 status="$(dl_task_field "$UUID" '.status // ""')"
 if [ "$status" = "completed" ]; then
+  if [ -n "$(dlc_anno_get "$UUID" reviewer)" ]; then
+    dlc_require_reviewer "$UUID"
+    dl_do dl_task "$UUID" annotate "review-start="
+    dl_do dl_task "$UUID" annotate "reviewer="
+  fi
   dl_log "task $UUID already completed"
   exit "$DL_OK"
 fi
 
-# Review-ready work is claimable by any worker by design: the agent that
-# implemented a task and the agent that reviews it are separate loop processes
-# with separate owners. The implementer is recorded as a handoff below, not
-# treated as a competing claim.
+# The implementation assignee and reviewer are independent. Only the exact
+# reviewer agent that claimed this task may give it a terminal disposition.
+dlc_require_reviewer "$UUID"
+
+# The implementation owner is recorded as a handoff below, not treated as a
+# competing claim. dlc_require_reviewer above is the independent review lock.
 assignee="$(dl_task_field "$UUID" '.assignee // ""')"
 implementer="$(owner_base "$assignee")"
 
@@ -196,6 +205,8 @@ fi
 dl_anno_event "$UUID" "completed outcome=$OUTCOME${branch:+ (review branch: $branch)}"
 # shellcheck disable=SC1010  # 'done' is the Taskwarrior subcommand, not a loop keyword
 dl_do dl_task "$UUID" done
+dl_do dl_task "$UUID" annotate "review-start="
+dl_do dl_task "$UUID" annotate "reviewer="
 case "$OUTCOME" in
   merged) dl_log "done: $UUID — merged review accepted" ;;
   stacked) dl_log "done: $UUID — review branch \"$branch\" preserved for its planned successor" ;;

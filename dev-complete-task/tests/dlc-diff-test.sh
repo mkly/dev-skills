@@ -31,7 +31,7 @@ if [ "${MOCK_TASK_MODE:-valid}" = fail ]; then
   exit 2
 fi
 printf '%s\n' \
-  "[{\"uuid\":\"12345678-1234-1234-1234-123456789abc\",\"description\":\"metadata regression fixture\",\"project\":\"dev-loop-skill\",\"status\":\"completed\",\"annotations\":[{\"description\":\"base=${MOCK_BASE}\"},{\"description\":\"branch=review/fixture\"}]}]"
+  "[{\"uuid\":\"12345678-1234-1234-1234-123456789abc\",\"description\":\"metadata regression fixture\",\"project\":\"dev-loop-skill\",\"status\":\"pending\",\"annotations\":[{\"description\":\"base=${MOCK_BASE}\"},{\"description\":\"branch=review/fixture\"},{\"description\":\"reviewer=fixture-owner#fixture-agent\"}]}]"
 EOF
 chmod +x "$TMP/bin/task"
 
@@ -49,7 +49,7 @@ git -C "$TMP/repo" switch -q -
 
 (
   cd "$TMP/repo"
-  PATH="$TMP/bin:$PATH" MOCK_BASE="$base" \
+  PATH="$TMP/bin:$PATH" MOCK_BASE="$base" DEV_LOOP_OWNER=fixture-owner AGENT_PID=fixture-agent \
     "$ROOT/scripts/dlc-diff.sh" review/fixture >"$TMP/valid.out" 2>"$TMP/valid.err"
 )
 assert_contains "$TMP/valid.out" "### produced by task 12345678 — metadata regression fixture"
@@ -63,7 +63,7 @@ assert_contains "$TMP/valid.out" "+review"
 set +e
 (
   cd "$TMP/repo"
-  PATH="$TMP/bin:$PATH" MOCK_TASK_MODE=fail MOCK_BASE="$base" \
+  PATH="$TMP/bin:$PATH" MOCK_TASK_MODE=fail MOCK_BASE="$base" DEV_LOOP_OWNER=fixture-owner AGENT_PID=fixture-agent \
     "$ROOT/scripts/dlc-diff.sh" review/fixture >"$TMP/fail.out" 2>"$TMP/fail.err"
 )
 rc=$?

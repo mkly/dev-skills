@@ -31,12 +31,15 @@ Keep the target repository's integration checkout as the current directory.
 | `loop-id: ...` | exact controller-run UUID |
 | `loop-round: <n>` | wrapper round |
 | `plan: <producer-uuid>` | hop to a producer's `plan` UDA when this task carries none of its own |
+| `reviewer=<owner>#<nonce>` | independent reviewer lock; latest value wins |
+| `review-start=<timestamp>` | reviewer claim time used for explicit stale takeover |
 
 Completion writes:
 
 | State | Meaning |
 |---|---|
 | `dev-complete-task: merged ...` | audit note from `dlc-merge.sh` |
+| `dev-complete-task: review claimed ...` | reviewer lock lifecycle audit |
 | `dev-loop: completed outcome=<value> ...` | terminal lifecycle event from `dlc-done.sh` |
 | `review-of: <short> <branch>` | follow-up task points to its reviewed producer |
 
@@ -51,7 +54,7 @@ former skill layout.
 | Code | Meaning | Response |
 |---:|---|---|
 | `0` | success, including an empty collection | continue |
-| `10` | completion finalizer found another owner | stop or obtain explicit takeover authorization |
+| `10` | review is unclaimed or held by another reviewer agent | stop; release or explicitly steal only a stale review claim |
 | `20` | usage, missing tool, dirty checkout, or failed precondition | correct the precondition; apply `dev-ask` when environmental |
 | `30` | missing branch/base or merge conflict | preserve the branch and treat it as a finding |
 
@@ -63,12 +66,15 @@ code verbatim, including values that happen to equal `20` or `30`.
 | Script | Arguments | stdout | Mutation |
 |---|---|---|---|
 | `dlc-collect.sh` | `[--from-task <task-ref>]` | JSON branch array | none |
+| `dlc-claim.sh` | `<task-ref> [--steal-after <dur>]` | exact task UUID | reviewer annotations only |
+| `dlc-release.sh` | `<task-ref>` | none | clears current reviewer annotations |
 | `dlc-diff.sh` | `<branch> [--stat-only] [-- <git flags>]` | log/diff | none |
 | `dlc-test.sh` | `<branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>` | command output | temporary worktree/lease only |
 | `dlc-merge.sh` | `<branch> [--dry-run]` | resulting HEAD | local merge, safe branch delete, audit annotation |
 | `dlc-done.sh` | `<uuid> --outcome <merged\|stacked\|superseded> [--stop-box] [--keep-worktree] [--force] [--dry-run]` | none | task completion and implementation-resource cleanup |
 
 All diagnostics go to stderr. `dlc-collect.sh` and `dlc-diff.sh` are read-only.
+Diff, test, merge, and finalization require the caller's exact reviewer claim.
 No helper pushes or force-deletes an unmerged review branch.
 
 ## Environment
@@ -87,11 +93,16 @@ producer task's implementation lease:
 | `INCUS_REMOTE` | unset | optional Incus remote |
 | `DEV_IMPLEMENT_TASK_SKILL_DIR` | sibling `../dev-implement-task` | installed implementation skill used by `dlc-done.sh` |
 
+`DLC_STATE_DIR/locks/review-select.lock` serializes reviewer claims on one host.
+The durable `reviewer=` annotation and exact readback detect lost Taskwarrior
+writes; as with implementation claims, TaskChampion sync is not a distributed
+mutex across replicas.
+
 `dlc-done.sh` also honors the implementation harness's `DEV_LOOP_OWNER`,
 `DEV_LOOP_STATE_DIR`, `DEV_LOOP_WORKTREE_DIR`, and provider settings. The
-completing worker does **not** need to be the one that implemented the task —
-review-ready work is claimable by any worker, and a different implementer is
-recorded as a `completion handoff from <owner>` annotation.
+reviewer does **not** need to be the implementer: any worker may acquire the
+separate reviewer lock, while a different implementer is recorded as a
+`completion handoff from <owner>` annotation.
 
 ## Recipes
 
@@ -109,6 +120,10 @@ Each object contains:
 {branch, merged, ahead, superseded, superseded_by, base, task}
 ```
 
+The nested task includes `reviewer` and `review_started`. Inspect these before
+selection, then arbitrate the final choice with `dlc-claim.sh`; collection alone
+does not reserve a task.
+
 Git is ground truth for branch existence. With `--from-task`, the helper derives
 the repository identity from the current GitHub origin and the goal/loop
 identity from that producer; callers never supply a project name. Taskwarrior
@@ -122,13 +137,25 @@ from the user; it cannot be completed as a Taskwarrior producer automatically.
 ### Inspect a branch
 
 ```sh
+scripts/dlc-claim.sh "$uuid"
 scripts/dlc-diff.sh "$branch"
 scripts/dlc-diff.sh "$branch" --stat-only
 scripts/dlc-diff.sh "$branch" -- -w
 ```
 
 The helper uses recorded `base=` when it resolves, otherwise the merge base of
-the current integration HEAD and branch.
+the current integration HEAD and branch. Exit `10` if this agent no longer owns
+the reviewer claim.
+
+### Release an abandoned review
+
+```sh
+scripts/dlc-release.sh "$uuid"
+```
+
+Do this only before a terminal verdict. A crash leaves the durable claim in
+place; another reviewer may use `dlc-claim.sh "$uuid" --steal-after 4h` after
+verifying the recorded age and current agent state.
 
 ### Run isolated verification
 
@@ -209,7 +236,8 @@ recreate a deleted review branch by guessing its contents.
 | Symptom | Cause and response |
 |---|---|
 | `dlc-collect.sh` returns `[]` | No resolving branch matches the producer's exact repository, goal, and loop identity. Inspect task identity, `branch=`, and local refs. |
-| Producer is active but owned by someone else | Do not finalize it. Ask that owner to complete/release it or obtain explicit takeover authorization. |
+| `dlc-claim.sh` exits `10` | Another reviewer owns the task. Do not inspect or dispose it; wait for release or use explicit stale takeover when justified. |
+| Producer is active under another assignee | Expected after implementation handoff. The separate reviewer claim, not `assignee`, controls review disposition. |
 | Dirty integration checkout | Preserve the user's changes. Commit/stash only with authorization, then retry completion. |
 | `dlc-diff.sh` cannot resolve the base | Restore/fetch the recorded base or review against a deliberately selected merge base; do not guess silently. |
 | Verification worktree already holds the branch | Reuse/remove it through `dlc-test.sh`; do not delete an unrelated worktree. |

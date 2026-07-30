@@ -20,7 +20,8 @@
 #               merge-base HEAD..branch, else "" (the diff base)
 #     - task:   {uuid, short, description, project, repo_id, goal, loop_id,
 #                loop_round, status, end, base, commits, input, summary,
-#                acceptance} or null when no task records the branch
+#                acceptance, reviewer, review_started} or null when no task
+#                records the branch
 #
 # Exit: 0 ok (no branches → 0 + "[]"), 20 precondition/usage.
 set -euo pipefail
@@ -98,7 +99,8 @@ by_branch="$(printf '%s' "$raw" | jq "$DLC_JQ_DEFS"'
         repo_id: note("repo-id"), goal: note("goal"),
         loop_id: note("loop-id"), loop_round: note("loop-round"),
         input: note("input"),
-        summary: notes("summary"), acceptance: notes("acceptance") } ]
+        summary: notes("summary"), acceptance: notes("acceptance"),
+        reviewer: kv("reviewer"), review_started: kv("review-start") } ]
   | INDEX(.branch)')"
 
 # input-branch -> consuming task: a branch named by another task's latest

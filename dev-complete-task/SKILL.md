@@ -22,12 +22,19 @@ keep the target repository as the current directory. Use bundled scripts'
 
 ## Review
 
-Resolve the exact producer and branch:
+Inspect matching pending producers, select exactly one, then acquire its
+separate reviewer lock before reading the diff:
 
 ```sh
 branches="$("$COMPLETE_SKILL/scripts/dlc-collect.sh" --from-task "$uuid")"
+"$COMPLETE_SKILL/scripts/dlc-claim.sh" "$uuid"
 "$COMPLETE_SKILL/scripts/dlc-diff.sh" "$branch"
 ```
+
+Exit `10` means another agent is reviewing it; do not inspect, test, merge, or
+finalize that producer. The reviewer lock is independent of the implementation
+assignee and remains held through the terminal verdict. Release it with
+`dlc-release.sh "$uuid"` only when abandoning review without a verdict.
 
 Require matching repository/loop identity, acceptance, summary, commit range,
 and—when active—the current owner. Review correctness, regression risk, tests,

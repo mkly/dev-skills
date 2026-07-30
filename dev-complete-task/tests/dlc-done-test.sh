@@ -32,6 +32,7 @@ case "$cmd" in
       [{uuid: $uuid, status: $status, assignee: ($owner + "#test"),
         description: "fixture task",
         annotations: [{description: "branch=review/fixture"},
+                      {description: "reviewer=fixture-owner#fixture-agent"},
                       {description: ("commits=base.." + env.MOCK_HEAD + " (n=1)")}]}]'
     ;;
   annotate)
@@ -61,6 +62,7 @@ export PATH="$TMP/bin:$PATH"
 export MOCK_STATUS="$TMP/status"
 export MOCK_TASK_LOG="$TMP/task.log"
 export DEV_LOOP_OWNER="fixture-owner"
+export AGENT_PID="fixture-agent"
 export DEV_LOOP_STATE_DIR="$TMP/state"
 export XDG_CONFIG_HOME="$TMP/config"
 
@@ -91,11 +93,21 @@ set -e
 [ "$rc" -eq 20 ] || fail "invalid outcome returned $rc, expected 20"
 [ ! -s "$TMP/task.log" ] || fail "invalid outcome mutated the task"
 
+set +e
+AGENT_PID=foreign-agent "$DONE" "$uuid" --outcome merged \
+  >"$TMP/foreign.out" 2>"$TMP/foreign.err"
+rc=$?
+set -e
+[ "$rc" -eq 10 ] || fail "foreign reviewer finalization returned $rc, expected 10"
+[ ! -s "$TMP/task.log" ] || fail "foreign reviewer mutated the task"
+
 "$DONE" "$uuid" --outcome merged >"$TMP/merged.out" 2>"$TMP/merged.err"
 [ "$(cat "$TMP/status")" = completed ] || fail "task was not completed"
 grep -Fq 'completed outcome=merged' "$TMP/task.log" \
   || fail "merged outcome annotation was not recorded"
 grep -Fxq 'done' "$TMP/task.log" || fail "task done was not invoked"
+grep -Fxq $'annotate\treviewer=' "$TMP/task.log" \
+  || fail "merged outcome did not release the reviewer lock"
 grep -Fxq $'modify\tplan:' "$TMP/task.log" \
   || fail "merged outcome did not clear the plan UDA"
 

@@ -20,7 +20,7 @@ cat >"$TMP/bin/task" <<'EOF'
 set -euo pipefail
 while [ "$#" -gt 0 ] && [[ "$1" == rc.* ]]; do shift; done
 
-if [ "${1:-}" = export ]; then
+if [ "${1:-}" = export ] || [ "${2:-}" = export ]; then
   jq -n --arg base "$MOCK_BASE" '[{
     uuid: "12345678-1234-1234-1234-123456789abc",
     description: "fixture task",
@@ -29,6 +29,7 @@ if [ "${1:-}" = export ]; then
     annotations: [
       {description: ("base=" + $base)},
       {description: "branch=review/fixture"},
+      {description: "reviewer=fixture-owner#fixture-agent"},
       {description: "acceptance: fixture lands"},
       {description: "summary: fixture implementation"}
     ]
@@ -59,6 +60,8 @@ git -C "$TMP/repo" switch -q master 2>/dev/null \
 
 export PATH="$TMP/bin:$PATH"
 export MOCK_TASK_LOG="$TMP/task.log"
+export DEV_LOOP_OWNER=fixture-owner
+export AGENT_PID=fixture-agent
 
 cd "$TMP/repo"
 result="$($MERGE review/fixture 2>"$TMP/merge.err")"

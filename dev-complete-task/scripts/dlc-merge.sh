@@ -57,6 +57,12 @@ git rev-parse --verify --quiet "refs/heads/${BRANCH}" >/dev/null \
 [ -z "$(git status --porcelain --untracked-files=no)" ] \
   || dlc_die "$DLC_PRECOND" "worktree is dirty; commit or stash before merging review branches"
 
+task_json="$(dlc_task_for_branch "$BRANCH")"
+[ "$task_json" != "null" ] \
+  || dlc_die "$DLC_PRECOND" "review branch '$BRANCH' has no producing task; it cannot be merged without a reviewer claim"
+uuid="$(printf '%s' "$task_json" | jq -r '.uuid // ""')"
+dlc_require_reviewer "$uuid"
+
 already_merged=0
 git merge-base --is-ancestor "$BRANCH" HEAD >/dev/null 2>&1 && already_merged=1
 
@@ -96,7 +102,6 @@ dlc_log "deleted review branch '$BRANCH'"
 
 # Audit trail on the producing task before completion finalizes it (best-effort;
 # legacy producers may already be completed).
-uuid="$(dlc_task_for_branch "$BRANCH" | jq -r '.uuid // ""')"
 if [ -n "$uuid" ]; then
   if task rc.confirmation=no rc.verbose=nothing "$uuid" annotate \
        "dev-complete-task: merged $BRANCH into $cur ($(git rev-parse --short=12 HEAD)); branch deleted" \

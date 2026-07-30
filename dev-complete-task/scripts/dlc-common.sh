@@ -11,14 +11,16 @@
 # ---------------------------------------------------------------------------
 # Exit codes (stable contract the agent branches on; see reference.md).
 #   0  ok        (a query that legitimately matches nothing is also 0 + empty)
+#   10 lost-race (review task is unclaimed or claimed by another reviewer)
 #   20 precondition / usage failure (missing tool, not in a repo, dirty
 #      worktree, bad args)
 #   30 missing-artifact (branch/base not present locally) or merge-conflict
 # ---------------------------------------------------------------------------
 DLC_OK=0
+DLC_LOST=10
 DLC_PRECOND=20
 DLC_MISSING=30
-export DLC_OK DLC_PRECOND DLC_MISSING
+export DLC_OK DLC_LOST DLC_PRECOND DLC_MISSING
 
 # ---------------------------------------------------------------------------
 # Logging — everything diagnostic goes to stderr so stdout stays parseable.
@@ -88,6 +90,19 @@ dlc_task_export() {
   task rc.confirmation=no rc.json.array=on rc.verbose=nothing "$@" export 2>/dev/null
 }
 
+# dlc_task_field <uuid> <jq-expr> — print one field from a single task.
+dlc_task_field() {
+  local uuid="$1" expr="$2"
+  dlc_task_export "$uuid" | jq -r ".[0] | ${expr}" 2>/dev/null
+}
+
+# dlc_task_exists <uuid> — true if exactly one task matches.
+dlc_task_exists() {
+  local uuid="$1" n
+  n="$(dlc_task_export "$uuid" | jq 'length' 2>/dev/null || echo 0)"
+  [ "${n:-0}" = "1" ]
+}
+
 # ---------------------------------------------------------------------------
 # Annotation readers. dev-implement-task records two annotation styles:
 #   * machine state as  key=value   (box=, base=, branch=, commits=)  — last wins
@@ -113,6 +128,116 @@ DLC_JQ_DEFS='
 '
 # shellcheck disable=SC2090
 export DLC_JQ_DEFS
+
+# ---------------------------------------------------------------------------
+# Reviewer identity and durable lock state. The implementation owner remains
+# in Taskwarrior's assignee UDA; completion uses reviewer= annotations so both
+# roles can be live at the same time. AGENT_PID separates concurrent agents
+# that intentionally share one DEV_LOOP_OWNER.
+# ---------------------------------------------------------------------------
+dlc_default_owner() {
+  local host
+  host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)"
+  printf '%s@%s' "${USER:-$(id -un 2>/dev/null || echo user)}" "$host"
+}
+
+dlc_resolve_review_owner() {
+  if [ -n "${DEV_LOOP_OWNER:-}" ]; then
+    printf '%s' "$DEV_LOOP_OWNER"
+    return
+  fi
+  local owner_file="${XDG_CONFIG_HOME:-$HOME/.config}/dev-loop/owner" stored
+  if [ -f "$owner_file" ]; then
+    stored="$(<"$owner_file")"
+    if [ -n "$stored" ]; then
+      printf '%s' "$stored"
+      return
+    fi
+  fi
+  dlc_default_owner
+}
+
+DLC_REVIEW_OWNER="$(dlc_resolve_review_owner)"
+DLC_REVIEW_NONCE="${AGENT_PID:-}"
+export DLC_REVIEW_OWNER DLC_REVIEW_NONCE
+
+dlc_owner_base() { printf '%s' "${1%%#*}"; }
+
+# dlc_anno_get <uuid> <key> — latest key=value annotation, or empty.
+dlc_anno_get() {
+  local uuid="$1" key="$2"
+  dlc_task_export "$uuid" | jq -r --arg k "$key" '
+    (.[0].annotations // []) | map(.description)
+    | map(select(startswith($k + "="))) | last // ""
+    | if . == "" then "" else .[($k|length)+1:] end
+  ' 2>/dev/null
+}
+
+dlc_anno_set() {
+  local uuid="$1" key="$2" value="$3"
+  task rc.confirmation=no rc.recurrence.confirmation=no rc.verbose=nothing \
+    "$uuid" annotate "${key}=${value}"
+}
+
+dlc_review_event() {
+  local uuid="$1" message="$2"
+  task rc.confirmation=no rc.recurrence.confirmation=no rc.verbose=nothing \
+    "$uuid" annotate "dev-complete-task: ${message} (by ${DLC_REVIEW_OWNER})"
+}
+
+# dlc_require_reviewer <uuid> — require this exact reviewer/agent claim.
+dlc_require_reviewer() {
+  local uuid="$1" held owner nonce
+  held="$(dlc_anno_get "$uuid" reviewer)"
+  owner="$(dlc_owner_base "$held")"
+  if [ -z "$owner" ]; then
+    dlc_die "$DLC_LOST" "task $uuid has no reviewer claim; run dlc-claim.sh first"
+  fi
+  if [ "$owner" != "$DLC_REVIEW_OWNER" ]; then
+    dlc_die "$DLC_LOST" "task $uuid is being reviewed by '$owner', not you ($DLC_REVIEW_OWNER)"
+  fi
+  nonce="${held#*#}"
+  [ "$nonce" != "$held" ] || nonce=""
+  if [ -n "$DLC_REVIEW_NONCE" ] && [ -n "$nonce" ] && [ "$nonce" != "$DLC_REVIEW_NONCE" ]; then
+    dlc_die "$DLC_LOST" "task $uuid is held by another reviewer agent sharing owner '$owner' (holder nonce $nonce, ours $DLC_REVIEW_NONCE)"
+  fi
+}
+
+# dlc_require_branch_reviewer <branch> — resolve its producer and require lock.
+dlc_require_branch_reviewer() {
+  local branch="$1" task_json uuid
+  task_json="$(dlc_task_for_branch "$branch")"
+  [ "$task_json" != "null" ] \
+    || dlc_die "$DLC_PRECOND" "review branch '$branch' has no producing task; it cannot be reviewer-claimed"
+  uuid="$(printf '%s' "$task_json" | jq -r '.uuid // ""')"
+  [ -n "$uuid" ] || dlc_die "$DLC_PRECOND" "review branch '$branch' has no producing task UUID"
+  dlc_require_reviewer "$uuid"
+}
+
+# Local host mutex for the Taskwarrior annotation read-modify-verify sequence.
+dlc_review_lock() {
+  local timeout="${1:-10}" lock_file
+  mkdir -p "$DLC_STATE_DIR/locks"
+  lock_file="$DLC_STATE_DIR/locks/review-select.lock"
+  exec 9>"$lock_file"
+  flock -w "$timeout" 9 \
+    || dlc_die "$DLC_PRECOND" "could not acquire reviewer lock within ${timeout}s (another claim is in progress)"
+}
+
+dlc_dur_to_secs() {
+  local value="$1" number unit
+  [[ "$value" =~ ^([0-9]+)([smhd])$ ]] \
+    || dlc_die "$DLC_PRECOND" "invalid duration '$value' (expected e.g. 30m, 4h)"
+  number="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+  case "$unit" in s) ;; m) number=$((number * 60)) ;; h) number=$((number * 3600)) ;; d) number=$((number * 86400)) ;; esac
+  printf '%s\n' "$number"
+}
+
+dlc_ts_to_epoch() {
+  local ts="$1"
+  [ -n "$ts" ] || return 0
+  date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2} UTC" +%s 2>/dev/null || true
+}
 
 # dlc_task_for_branch <branch> — normalized JSON of the task recording
 # branch=<branch> (last match wins across ALL statuses for legacy
@@ -142,7 +267,8 @@ dlc_task_for_branch() {
           repo_id: note("repo-id"), goal: note("goal"),
           loop_id: note("loop-id"), loop_round: note("loop-round"),
           input: note("input"),
-          summary: notes("summary"), acceptance: notes("acceptance") }
+          summary: notes("summary"), acceptance: notes("acceptance"),
+          reviewer: kv("reviewer"), review_started: kv("review-start") }
       end')" || {
     rc=$?
     dlc_err "failed to parse Taskwarrior metadata while resolving producing task for branch '${branch}' (jq exit ${rc})"

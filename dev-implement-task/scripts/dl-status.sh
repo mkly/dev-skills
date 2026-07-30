@@ -3,7 +3,7 @@
 #
 #   dl-status.sh [-h]
 #
-# Reports: your active claims, ALL active claims (owner + age + staleness),
+# Reports: implementation claims, separate reviewer claims (owner + age),
 # live crabbox leases, and reconciliation — orphan leases (running but not
 # referenced by any pending task) and dangling box refs (task points at a lease
 # that is gone). Mutates nothing; use dl-release.sh or dev-complete-task to act.
@@ -54,6 +54,27 @@ for u in ${pending[@]+"${pending[@]}"}; do
 done
 [ "$any_active" -eq 1 ] || printf '  (none)\n'
 printf '  (* = owned by you)\n'
+
+printf '\nActive reviews:\n'
+any_review=0
+for u in ${pending[@]+"${pending[@]}"}; do
+  [ -n "$u" ] || continue
+  reviewer="$(dl_anno_get "$u" reviewer)"
+  [ -n "$reviewer" ] || continue
+  any_review=1
+  review_start="$(dl_anno_get "$u" review-start)"
+  desc="$(dl_task_field "$u" '.description // ""')"
+  epoch="$(dl_ts_to_epoch "$review_start")"
+  if [ -n "$epoch" ]; then age=$(( now - epoch )); else age=0; fi
+  mark="    "
+  [ "${reviewer%%#*}" = "$DEV_LOOP_OWNER" ] && mark=" *  "
+  flag=""
+  [ -n "$epoch" ] && [ "$age" -ge "$stale_secs" ] && flag="  [STALE]"
+  printf '%s%s  %-22s  age %-7s  %s%s\n' \
+    "$mark" "${u:0:8}" "$reviewer" "$(fmt_age "$age")" "${desc:0:40}" "$flag"
+done
+[ "$any_review" -eq 1 ] || printf '  (none)\n'
+printf '  (* = reviewed by you)\n'
 
 # Live leases from crabbox.
 printf '\nLive leases:\n'

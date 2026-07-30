@@ -50,6 +50,10 @@ git rev-parse --verify --quiet "refs/heads/${BRANCH}" >/dev/null \
   || dlc_die "$DLC_MISSING" "review branch '${BRANCH}' is not present locally"
 
 task_json="$(dlc_task_for_branch "$BRANCH")"
+[ "$task_json" != "null" ] \
+  || dlc_die "$DLC_PRECOND" "review branch '$BRANCH' has no producing task; it cannot be reviewer-claimed"
+uuid="$(printf '%s' "$task_json" | jq -r '.uuid // ""')"
+dlc_require_reviewer "$uuid"
 base="$(printf '%s' "$task_json" | jq -r '.base // ""')"
 if [ -n "$base" ] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
   dlc_log "diff base from producing task's base= annotation: ${base:0:12}"
@@ -60,13 +64,9 @@ else
   dlc_log "diff base from merge-base HEAD ${BRANCH}: ${base:0:12}"
 fi
 
-if [ "$task_json" != "null" ]; then
-  short="$(printf '%s' "$task_json" | jq -r '.uuid[0:8]')"
-  desc="$(printf '%s' "$task_json" | jq -r '.description // ""')"
-  printf '### produced by task %s — %s\n\n' "$short" "$desc"
-else
-  printf '### ORPHAN branch — no task records it\n\n'
-fi
+short="$(printf '%s' "$task_json" | jq -r '.uuid[0:8]')"
+desc="$(printf '%s' "$task_json" | jq -r '.description // ""')"
+printf '### produced by task %s — %s\n\n' "$short" "$desc"
 
 range="${base}..${BRANCH}"
 dlc_log "diff for ${BRANCH}: ${range:0:12}..${BRANCH}"

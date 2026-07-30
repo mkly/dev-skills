@@ -20,6 +20,8 @@ payload="[
     {\"description\":\"branch=review/one\"},
     {\"description\":\"repo-id: github.com/acme/demo\"},
     {\"description\":\"goal: first\"},
+    {\"description\":\"review-start=20260730T120000Z\"},
+    {\"description\":\"reviewer=reviewer-a#100\"},
     {\"description\":\"loop-id: 11111111-1111-4111-8111-111111111111\"},
     {\"description\":\"loop-round: 1\"}]},
   {\"uuid\":\"22222222-2222-4222-8222-222222222222\",\"description\":\"second loop\",\"project\":\"demo\",\"status\":\"pending\",\"annotations\":[
@@ -69,6 +71,8 @@ printf '%s' "$scoped" | jq -e '
   and .[0].task.goal == "first"
   and .[0].task.loop_id == "11111111-1111-4111-8111-111111111111"
   and .[0].task.loop_round == "1"
+  and .[0].task.reviewer == "reviewer-a#100"
+  and .[0].task.review_started == "20260730T120000Z"
 ' >/dev/null || fail "project plus loop-id scoping was incorrect"
 
 set +e

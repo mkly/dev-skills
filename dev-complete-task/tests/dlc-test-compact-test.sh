@@ -14,6 +14,20 @@ fail() {
 
 mkdir -p "$TMP/bin-rtk" "$TMP/bin-raw" "$TMP/repo"
 
+cat >"$TMP/bin-rtk/task" <<'EOF'
+#!/usr/bin/env bash
+jq -n '[{
+  uuid: "12345678-1234-1234-1234-123456789abc",
+  description: "compact fixture",
+  project: "fixture",
+  status: "pending",
+  annotations: [
+    {description: "branch=review/compact"},
+    {description: "reviewer=fixture-owner#fixture-agent"}
+  ]
+}]'
+EOF
+
 cat >"$TMP/bin-rtk/crabbox" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -43,7 +57,8 @@ printf '<%s>\n' "$@"
 exit 9
 EOF
 
-chmod +x "$TMP/bin-rtk/crabbox" "$TMP/bin-rtk/rtk" "$TMP/bin-rtk/probe"
+chmod +x "$TMP/bin-rtk/task" "$TMP/bin-rtk/crabbox" "$TMP/bin-rtk/rtk" "$TMP/bin-rtk/probe"
+ln -s "$TMP/bin-rtk/task" "$TMP/bin-raw/task"
 ln -s "$TMP/bin-rtk/crabbox" "$TMP/bin-raw/crabbox"
 ln -s "$TMP/bin-rtk/probe" "$TMP/bin-raw/probe"
 
@@ -57,6 +72,8 @@ git -C "$TMP/repo" branch review/compact
 
 export DLC_WORKTREE_DIR="$TMP/worktrees"
 export MOCK_RTK_MARKER="$TMP/rtk.marker"
+export DEV_LOOP_OWNER=fixture-owner
+export AGENT_PID=fixture-agent
 
 cat >"$TMP/expected.args" <<'EOF'
 <normal>
