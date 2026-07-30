@@ -97,7 +97,16 @@ nosync=0
 
 payload=(${CMD[@]+"${CMD[@]}"})
 if [ "$COMPACT" -eq 1 ]; then
-  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then exec rtk test "$@"; fi; printf "%s\n" "dev-implement-task: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-implement-task-compact ${CMD[@]+"${CMD[@]}"})
+  # `rtk test` reconstructs its variadic command arguments into shell input.
+  # Give it one POSIX-shell-quoted command string so that reconstruction cannot
+  # collapse spaces, empty arguments, or literal shell syntax. Keep the original
+  # argv after that string for the unfiltered fallback path.
+  compact_command=""
+  for arg in ${CMD[@]+"${CMD[@]}"}; do
+    escaped="${arg//\'/\'\\\'\'}"
+    compact_command+="${compact_command:+ }'$escaped'"
+  done
+  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then command=$1; shift; exec rtk test "$command"; fi; shift; printf "%s\n" "dev-implement-task: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-implement-task-compact "$compact_command" ${CMD[@]+"${CMD[@]}"})
 fi
 
 run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")
