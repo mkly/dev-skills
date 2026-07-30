@@ -22,6 +22,11 @@ read-only goal/round state as compact JSON.
 No stage pushes to a remote. Only completion merges into the current local
 integration branch.
 
+The repository-level `loop` executable polls Taskwarrior and launches the
+selected agent. For example, `./loop --agent codex` processes all pending work;
+add `--small`, `--implement-task`, or `--complete-task` to restrict its queue or
+lifecycle stage.
+
 Taskwarrior repository projects are autonomous: every task uses the lowercase
 basename of the GitHub `origin` URL. Goal runs are isolated by `goal:` and a
 generated `loop-id:` annotation rather than by project subnames.

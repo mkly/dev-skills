@@ -4,8 +4,8 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: check.sh --agent <codex|claude|agy> [--small]
-                [--implement-task|--complete-task]
+Usage: loop --agent <codex|claude|agy> [--small]
+            [--implement-task|--complete-task]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 Use --small to consider only pending tasks tagged +SMALL.
@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --agent)
       if [ "$#" -lt 2 ]; then
-        printf 'check.sh: --agent requires a value\n' >&2
+        printf 'loop: --agent requires a value\n' >&2
         usage >&2
         exit 2
       fi
@@ -46,7 +46,7 @@ while [ "$#" -gt 0 ]; do
       exit 0
       ;;
     *)
-      printf 'check.sh: unknown argument: %s\n' "$1" >&2
+      printf 'loop: unknown argument: %s\n' "$1" >&2
       usage >&2
       exit 2
       ;;
@@ -54,7 +54,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if "$implement_only" && "$complete_only"; then
-  printf 'check.sh: --implement-task and --complete-task are mutually exclusive\n' >&2
+  printf 'loop: --implement-task and --complete-task are mutually exclusive\n' >&2
   usage >&2
   exit 2
 fi
@@ -62,12 +62,12 @@ fi
 case "$agent" in
   codex|claude|agy) ;;
   "")
-    printf 'check.sh: --agent is required\n' >&2
+    printf 'loop: --agent is required\n' >&2
     usage >&2
     exit 2
     ;;
   *)
-    printf 'check.sh: unsupported agent: %s\n' "$agent" >&2
+    printf 'loop: unsupported agent: %s\n' "$agent" >&2
     usage >&2
     exit 2
     ;;

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CHECK="$ROOT/check.sh"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/check-test.XXXXXX")"
+LOOP="$ROOT/loop"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/loop-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -60,7 +60,7 @@ clear_case() {
 
 expect_2() {
   set +e
-  "$CHECK" "$@" >"$TMP/validation.out" 2>"$TMP/validation.err"
+  "$LOOP" "$@" >"$TMP/validation.out" 2>"$TMP/validation.err"
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "invalid arguments exited $rc instead of 2: $*"
@@ -85,7 +85,7 @@ grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
 clear_case
 printf '0\n' >"$TASK_COUNTS"
 set +e
-"$CHECK" --agent codex >"$TMP/idle.out" 2>"$TMP/idle.err"
+"$LOOP" --agent codex >"$TMP/idle.out" 2>"$TMP/idle.err"
 idle_rc=$?
 set -e
 [ "$idle_rc" -eq 143 ] || fail "idle polling fixture exited $idle_rc"
@@ -109,7 +109,7 @@ check_agent() {
     >"$TASK_EXPORT"
 
   set +e
-  "$CHECK" --agent "$selected" "$@" >"$TMP/$mode-$selected.out" 2>"$TMP/$mode-$selected.err"
+  "$LOOP" --agent "$selected" "$@" >"$TMP/$mode-$selected.out" 2>"$TMP/$mode-$selected.err"
   agent_rc=$?
   set -e
 
@@ -161,7 +161,7 @@ grep -Fq 'review-ready pending +SMALL tasks' "$AGENT_LOG" \
 clear_case
 printf '0\n' >"$TASK_COUNTS"
 set +e
-"$CHECK" --agent codex --implement-task >"$TMP/implement-idle.out" 2>"$TMP/implement-idle.err"
+"$LOOP" --agent codex --implement-task >"$TMP/implement-idle.out" 2>"$TMP/implement-idle.err"
 implement_idle_rc=$?
 set -e
 [ "$implement_idle_rc" -eq 143 ] || fail "implementation idle fixture exited $implement_idle_rc"
@@ -172,7 +172,7 @@ grep -Fq 'No claimable all pending tasks.' "$TMP/implement-idle.out" \
 clear_case
 printf '[]\n' >"$TASK_EXPORT"
 set +e
-"$CHECK" --agent claude --complete-task >"$TMP/complete-idle.out" 2>"$TMP/complete-idle.err"
+"$LOOP" --agent claude --complete-task >"$TMP/complete-idle.out" 2>"$TMP/complete-idle.err"
 complete_idle_rc=$?
 set -e
 [ "$complete_idle_rc" -eq 143 ] || fail "completion idle fixture exited $complete_idle_rc"
@@ -183,4 +183,4 @@ grep -Fq 'No review-ready all pending tasks.' "$TMP/complete-idle.out" \
 [ ! -s "$RESET_LOG" ] \
   || fail "non-interactive runs unexpectedly reset the terminal"
 
-printf 'PASS: check\n'
+printf 'PASS: loop\n'
