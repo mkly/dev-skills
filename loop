@@ -103,6 +103,19 @@ case "$agent" in
     ;;
 esac
 
+# Each loop process is one worker and needs its own claim identity. Workers that
+# share a DEV_LOOP_OWNER are indistinguishable to dl-claim.sh, which reads a
+# matching owner as its own prior claim and walks into live work. An explicit
+# DEV_LOOP_OWNER from the environment still wins.
+if [ -z "${DEV_LOOP_OWNER:-}" ]; then
+  worker_suffix="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ -n "$worker_suffix" ] || worker_suffix="$$"
+  worker_host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)"
+  DEV_LOOP_OWNER="${USER:-$(id -un 2>/dev/null || echo user)}@${worker_host}/worker-${worker_suffix}"
+fi
+export DEV_LOOP_OWNER
+printf 'loop: worker owner %s\n' "$DEV_LOOP_OWNER"
+
 task_filter=(status:pending)
 task_scope="all pending tasks"
 agent_scope="Process pending tasks regardless of whether they have the +SMALL tag."

@@ -133,10 +133,17 @@ dl_lock() {
     || dl_die "$DL_PRECOND" "could not acquire lock '$name' within ${timeout}s (another claim in progress)"
 }
 
+# Claim nonce identifying the calling agent, not this dl-claim.sh process: it
+# must stay stable across an agent's repeated claims (so re-claim is idempotent)
+# while separating two concurrent agents. `loop` exports AGENT_PID for this.
+# Without it we fall back to a per-call random nonce, which still serves as the
+# claim CAS token but cannot distinguish agents.
+AGENT_NONCE="${AGENT_PID:-}"
+
 # claim_one <uuid> — attempt to claim. Echoes uuid on success.
 # Returns: 0 claimed, 10 owned-by-another / lost, 20 absent or not pending.
 claim_one() {
-  local uuid="$1" status assignee start owner age now epoch stolen_from="" stolen_age="" claim_value readback
+  local uuid="$1" status assignee start owner age now epoch stolen_from="" stolen_age="" claim_value readback held_nonce same_agent
   dl_task_exists "$uuid" || { dl_err "no such task: $uuid"; return "$DL_PRECOND"; }
 
   status="$(dl_task_field "$uuid" '.status // ""')"
@@ -159,8 +166,20 @@ claim_one() {
     return "$DL_PRECOND"
   fi
 
+  # A matching owner with a different agent nonce is a concurrent agent sharing
+  # our owner id, not an earlier call from this agent. Treat it as foreign so
+  # the ordinary owned-by-another rules below apply — including --steal-after,
+  # which is how a restarted agent recovers its predecessor's abandoned task.
+  held_nonce="${assignee#*#}"
+  [ "$held_nonce" != "$assignee" ] || held_nonce=""
+  same_agent=1
+  if [ -n "$AGENT_NONCE" ] && [ -n "$held_nonce" ] && [ "$held_nonce" != "$AGENT_NONCE" ]; then
+    same_agent=0
+    dl_warn "task $uuid is held by a concurrent agent sharing owner '$owner' (holder nonce $held_nonce, ours $AGENT_NONCE)"
+  fi
+
   # Already ours → idempotent re-claim (ensure it is started).
-  if [ -n "$owner" ] && [ "$owner" = "$DEV_LOOP_OWNER" ]; then
+  if [ -n "$owner" ] && [ "$owner" = "$DEV_LOOP_OWNER" ] && [ "$same_agent" -eq 1 ]; then
     if [ -z "$start" ]; then dl_do dl_task "$uuid" start; fi
     dl_log "re-claimed (already owned by you): $uuid"
     printf '%s\n' "$uuid"
@@ -193,7 +212,11 @@ claim_one() {
 
   # Write our owner plus a nonce, read it back, and confirm the exact value.
   # Display/ownership checks elsewhere strip "#..." via owner_base.
-  claim_value="${DEV_LOOP_OWNER}#$$-${RANDOM}${RANDOM}"
+  if [ -n "$AGENT_NONCE" ]; then
+    claim_value="${DEV_LOOP_OWNER}#${AGENT_NONCE}"
+  else
+    claim_value="${DEV_LOOP_OWNER}#$$-${RANDOM}${RANDOM}"
+  fi
   dl_do dl_task "$uuid" modify assignee:"$claim_value"
   if [ -z "$DL_DRY_RUN" ]; then
     readback="$(dl_task_field "$uuid" '.assignee // ""')"
@@ -202,7 +225,14 @@ claim_one() {
       return "$DL_LOST"
     fi
   fi
-  dl_do dl_task "$uuid" start
+  if [ -z "$start" ]; then
+    dl_do dl_task "$uuid" start
+  else
+    # Stealing an already-active task: `start` would exit 1 and print "already
+    # started." to stdout, corrupting the uuid this script contracts to emit.
+    # Reset the timestamp instead so staleness measures the new owner's tenure.
+    dl_do dl_task "$uuid" modify start:now
+  fi
   if [ -n "$stolen_from" ]; then
     dl_anno_event "$uuid" "stolen from $stolen_from after ${stolen_age}s idle"
   fi

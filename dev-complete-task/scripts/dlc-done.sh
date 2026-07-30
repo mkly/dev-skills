@@ -7,10 +7,11 @@
 # Parks the task's live crabbox lease for the next task (or explicitly stops it),
 # removes the task's per-task git worktree and its scratch branch dl/<slug> (the
 # review/<slug> branch is KEPT), marks the task done (which drops it from pending
-# and releases the claim), and records a lifecycle annotation. Refuses to
-# complete a task owned by another owner unless --force.
+# and releases the claim), and records a lifecycle annotation. Any worker may
+# complete any review-ready task; a task implemented by another owner is
+# annotated as a handoff rather than refused.
 #
-# Exit: 0 ok, 10 owned by another owner (without --force), 20 precondition.
+# Exit: 0 ok, 20 precondition.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -31,11 +32,10 @@ Usage: dlc-done.sh <uuid> --outcome <merged|stacked|superseded>
   --outcome        terminal review disposition (required)
   --stop-box       stop the crabbox lease instead of parking it for reuse
   --keep-worktree  leave the per-task worktree + scratch branch in place
-  --force          complete even if the claim is owned by another owner, and
-                   bypass the unmerged-worktree guard
+  --force          bypass the unmerged-worktree guard
   --dry-run        log mutations instead of performing them
 
-Exit: 0 ok, 10 owned by another (use --force), 20 precondition.
+Exit: 0 ok, 20 precondition.
 EOF
 }
 
@@ -74,11 +74,12 @@ if [ "$status" = "completed" ]; then
   exit "$DL_OK"
 fi
 
+# Review-ready work is claimable by any worker by design: the agent that
+# implemented a task and the agent that reviews it are separate loop processes
+# with separate owners. The implementer is recorded as a handoff below, not
+# treated as a competing claim.
 assignee="$(dl_task_field "$UUID" '.assignee // ""')"
-owner_base="${assignee%%#*}"
-if [ -n "$owner_base" ] && [ "$owner_base" != "$DEV_LOOP_OWNER" ] && [ "$FORCE" -ne 1 ]; then
-  dl_die "$DL_LOST" "task $UUID is owned by '$owner_base', not you ($DEV_LOOP_OWNER); use --force to complete anyway"
-fi
+implementer="$(owner_base "$assignee")"
 
 branch="$(dl_anno_get "$UUID" branch)"
 base="$(dl_anno_get "$UUID" base)"
@@ -189,6 +190,9 @@ elif [ -n "$handle" ]; then
   fi
 fi
 
+if [ -n "$implementer" ] && [ "$implementer" != "$DEV_LOOP_OWNER" ]; then
+  dl_anno_event "$UUID" "completion handoff from $implementer"
+fi
 dl_anno_event "$UUID" "completed outcome=$OUTCOME${branch:+ (review branch: $branch)}"
 # shellcheck disable=SC1010  # 'done' is the Taskwarrior subcommand, not a loop keyword
 dl_do dl_task "$UUID" done

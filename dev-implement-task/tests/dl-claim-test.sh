@@ -227,4 +227,45 @@ small_pick="$(DEV_LOOP_OWNER=small-worker "$CLAIM" \
 [ "$small_pick" = "$escalated" ] \
   || fail "ordinary worker did not pick returned task; got '$small_pick'"
 
+# Two concurrent agents sharing one DEV_LOOP_OWNER must still be told apart by
+# their AGENT_PID nonce, or the second walks into the first's live task.
+shared="$(
+  "$CREATE" --goal claim-test \
+    --loop-id 11111111-1111-4111-8111-111111111111 \
+    --description 'shared owner task' --acceptance 'nonce separates agents' \
+    2>"$TMP/shared-create.err"
+)"
+DEV_LOOP_OWNER=shared-owner AGENT_PID=4001 "$CLAIM" "$shared" \
+  >"$TMP/shared-first.out" 2>"$TMP/shared-first.err" \
+  || fail "first agent could not claim shared-owner task"
+
+set +e
+DEV_LOOP_OWNER=shared-owner AGENT_PID=4002 "$CLAIM" "$shared" \
+  >"$TMP/shared-second.out" 2>"$TMP/shared-second.err"
+shared_rc=$?
+set -e
+[ "$shared_rc" -eq 10 ] \
+  || fail "concurrent agent sharing an owner exited $shared_rc, expected 10"
+[ ! -s "$TMP/shared-second.out" ] \
+  || fail "concurrent agent sharing an owner wrote stdout"
+task rc.context=none rc.json.array=on rc.verbose=nothing "$shared" export \
+  | jq -e '.[0].assignee == "shared-owner#4001"' >/dev/null \
+  || fail "concurrent agent overwrote the original claim"
+
+# A restarted agent (same owner, new pid) still recovers a stale claim via
+# --steal-after rather than being permanently locked out.
+stolen="$(DEV_LOOP_OWNER=shared-owner AGENT_PID=4002 "$CLAIM" "$shared" \
+  --steal-after 0s 2>"$TMP/shared-steal.err")"
+[ "$stolen" = "$shared" ] || fail "restarted agent could not steal a stale claim"
+task rc.context=none rc.json.array=on rc.verbose=nothing "$shared" export \
+  | jq -e '.[0].assignee == "shared-owner#4002"' >/dev/null \
+  || fail "steal did not record the new agent nonce"
+task rc.confirmation=no rc.verbose=nothing "$shared" \
+  modify assignee:shared-owner#4001 >/dev/null
+
+# The original agent re-claiming its own task stays idempotent.
+reclaimed="$(DEV_LOOP_OWNER=shared-owner AGENT_PID=4001 "$CLAIM" "$shared" \
+  2>"$TMP/shared-reclaim.err")"
+[ "$reclaimed" = "$shared" ] || fail "owning agent could not re-claim its task"
+
 printf 'ok: dl-claim concurrency test\n'

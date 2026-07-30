@@ -32,7 +32,8 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 
 | Variable              | Default                                  | Purpose |
 |-----------------------|------------------------------------------|---------|
-| `DEV_LOOP_OWNER`      | State file owner, else `$USER@$(hostname -s)` | Claim owner / lock identity. Set automatically via state file (`~/.config/dev-loop/owner`). For manual override, export a stable literal for the session; never use a dynamically re-expanded `$$-derived` value which changes per command and breaks locks. |
+| `DEV_LOOP_OWNER`      | `loop`-generated per worker, else state file owner, else `$USER@$(hostname -s)` | Claim owner / lock identity. Must be **distinct per concurrent worker**: two workers sharing an owner are indistinguishable to `dl-claim.sh`. `loop` generates one per worker process; the state file (`~/.config/dev-loop/owner`) is a single-agent default and is shared by every agent on the host. For manual override, export a stable literal for the session; never use a dynamically re-expanded `$$-derived` value which changes per command and breaks locks. |
+| `AGENT_PID`           | unset                                     | Calling agent's PID, exported by `loop`. Used as the claim nonce so an agent can re-claim its own task while a concurrent agent sharing its owner is still rejected. |
 | `CRABBOX_PROVIDER`    | `incus`                                   | Crabbox provider. Passed to **every** crabbox call (bare `crabbox list` defaults elsewhere and fails). |
 | `DEV_LOOP_TTL`        | `2h`                                      | Lease TTL passed to `crabbox warmup -ttl`. |
 | `DEV_LOOP_STALE`      | `4h`                                      | Age past which `dl-status.sh` flags an active claim `[STALE]`. (Stealing still requires an explicit `--steal-after`.) |
@@ -99,10 +100,12 @@ the unconfigured-sync result described by dev-create-tasks.
    claims use the same mutex, so selection and explicit claims exclude each
    other even though Taskwarrior 3's SQLite transaction covers one command at a
    time.
-4. Inside the lock, write
-   `assignee:${DEV_LOOP_OWNER}#<pid>-<random>`, then read it back via
+4. Inside the lock, write `assignee:${DEV_LOOP_OWNER}#${AGENT_PID}` (or
+   `#<pid>-<random>` when `AGENT_PID` is unset), then read it back via
    `task export | jq`; if the exact value is not still present, exit `10`.
-   Display and ownership checks strip the `#...` nonce suffix.
+   Display and ownership checks strip the `#...` nonce suffix, but re-claim
+   compares it: a matching owner with a different nonce is a concurrent agent
+   and exits `10`.
 5. `task <uuid> start` (sets `+ACTIVE` and the `start` timestamp used for
    staleness), annotate `claimed`, print the uuid.
 
@@ -332,4 +335,5 @@ build/test churn.
 | Worktree flagged ORPHAN in `dl-status.sh` | A worktree left by a completed/released task. Remove it: `git worktree remove --force <path>` then `git worktree prune` (the registration alone clears with just `git worktree prune`). |
 | Orphan lease in `dl-status.sh` | A leaked box. Stop it: `crabbox stop -provider <p> -id <id>`. |
 | Secrets uploaded to the box | Add them to `.crabboxignore`; review with `crabbox sync-plan`. Inject env only via crabbox `-allow-env`/`-env-from-profile`. |
-| Two agents, same Unix user, claims collide on identity | Export a distinct, stable literal `DEV_LOOP_OWNER` per agent before setup (never a $$-derived value). |
+| Two agents, same Unix user, claims collide on identity | Launch via `loop`, which mints a distinct owner per worker; otherwise export a distinct, stable literal `DEV_LOOP_OWNER` per agent before setup (never a $$-derived value). |
+| A worker picks up a task another worker is implementing | Both share a `DEV_LOOP_OWNER` — check `loop`'s startup line and `dl-status.sh`. Agents launched outside `loop` fall back to the shared state file owner. |

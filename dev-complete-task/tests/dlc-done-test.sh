@@ -27,7 +27,8 @@ cmd="${2:-}"
 case "$cmd" in
   export)
     status="$(cat "$MOCK_STATUS")"
-    jq -n --arg uuid "$uuid" --arg status "$status" --arg owner "$DEV_LOOP_OWNER" '
+    jq -n --arg uuid "$uuid" --arg status "$status" \
+      --arg owner "${MOCK_ASSIGNEE_OWNER:-$DEV_LOOP_OWNER}" '
       [{uuid: $uuid, status: $status, assignee: ($owner + "#test"),
         description: "fixture task",
         annotations: [{description: "branch=review/fixture"},
@@ -118,5 +119,19 @@ rc=$?
 set -e
 [ "$rc" -eq 20 ] || fail "missing preserved branch returned $rc, expected 20"
 [ ! -s "$TMP/task.log" ] || fail "missing preserved branch mutated the task"
+
+# A task implemented by a different worker is completed, not refused: review-ready
+# work is claimable by any worker. The implementer is recorded as a handoff.
+printf 'pending\n' >"$TMP/status"
+: >"$TMP/task.log"
+git branch review/fixture HEAD
+MOCK_ASSIGNEE_OWNER="other-worker" "$DONE" "$uuid" --outcome stacked \
+  >"$TMP/handoff.out" 2>"$TMP/handoff.err" \
+  || fail "completion of another worker's task was refused"
+grep -Fq 'completion handoff from other-worker' "$TMP/task.log" \
+  || fail "handoff annotation was not recorded"
+grep -Fq 'completed outcome=stacked' "$TMP/task.log" \
+  || fail "handoff completion did not record its outcome"
+git branch -D review/fixture >/dev/null
 
 printf 'ok: dlc-done outcome and finalization tests\n'

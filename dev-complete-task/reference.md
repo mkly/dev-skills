@@ -88,8 +88,10 @@ producer task's implementation lease:
 | `DEV_IMPLEMENT_TASK_SKILL_DIR` | sibling `../dev-implement-task` | installed implementation skill used by `dlc-done.sh` |
 
 `dlc-done.sh` also honors the implementation harness's `DEV_LOOP_OWNER`,
-`DEV_LOOP_STATE_DIR`, `DEV_LOOP_WORKTREE_DIR`, and provider settings. Keep the
-same owner used to claim and implement the task.
+`DEV_LOOP_STATE_DIR`, `DEV_LOOP_WORKTREE_DIR`, and provider settings. The
+completing worker does **not** need to be the one that implemented the task —
+review-ready work is claimable by any worker, and a different implementer is
+recorded as a `completion handoff from <owner>` annotation.
 
 ## Recipes
 
