@@ -28,6 +28,11 @@ or supplies a new loop ID. Stop on contradictory active loops. Preserve that
 loop ID and one stable `DEV_LOOP_OWNER` for the entire run. Run
 `$IMPLEMENT_SKILL/scripts/dl-setup.sh` once.
 
+For a request to drain existing work, if no pending task is available, do not
+create tasks or stop at a prose response. Run
+`$LOOP_SKILL/scripts/dl-finish.sh worker-idle` as the final command; it handles
+optional `AGENT_NOTIFY` and `AGENT_PID`.
+
 For a new goal, decompose it into the smallest coherent task set. Every task
 needs observable acceptance; use dependencies plus `input:` branches for
 stacks, end-to-end acceptance on the chain tip, and `--small` only for narrow
