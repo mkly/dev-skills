@@ -133,13 +133,13 @@ fi
 if "$implement_only"; then
   task_filter=(+READY -ACTIVE "${task_filter[@]}")
   task_scope="claimable ${task_scope}"
-  prompt="/skills dev-implement-task Implement one existing eligible task from the ${task_scope} for this repository through local review-branch creation only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not review, merge, or complete the task. Exit if no matching claimable task exists."
+  prompt="Use the dev-implement-task skill. Implement one existing eligible task from the ${task_scope} for this repository through local review-branch creation only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not review, merge, or complete the task. Exit if no matching claimable task exists."
 elif "$complete_only"; then
   task_filter=(+ACTIVE "${task_filter[@]}")
   task_scope="review-ready ${task_scope}"
-  prompt="/skills dev-complete-task Complete one existing implemented task from the ${task_scope} for this repository through review and final disposition only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations, including its branch annotation; do not derive a new goal from this prompt. ${agent_scope} Do not claim or implement unrelated pending work. Exit if no matching review-ready task exists."
+  prompt="Use the dev-complete-task skill. Complete one existing implemented task from the ${task_scope} for this repository through review and final disposition only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations, including its branch annotation; do not derive a new goal from this prompt. ${agent_scope} Do not claim or implement unrelated pending work. Exit if no matching review-ready task exists."
 else
-  prompt="/skills dev-loop Drain the existing ${task_scope} for this repository. Inspect matching pending Taskwarrior tasks first and use each task's existing goal and loop-id annotations; do not derive a new goal from this prompt. Process each existing goal and loop separately until no matching task remains. ${agent_scope} Exit if no matching pending task exists."
+  prompt="Use the dev-loop skill. Drain the existing ${task_scope} for this repository. Inspect matching pending Taskwarrior tasks first and use each task's existing goal and loop-id annotations; do not derive a new goal from this prompt. Process each existing goal and loop separately until no matching task remains. ${agent_scope} Exit if no matching pending task exists."
 fi
 
 eligible_count() {
