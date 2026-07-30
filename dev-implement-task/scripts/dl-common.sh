@@ -35,7 +35,10 @@ dl_die()  { local code="$1"; shift; dl_err "$*"; exit "$code"; }
 : "${INCUS_REMOTE:=}"            # optional -incus-remote
 : "${DEV_LOOP_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop}"
 : "${DEV_LOOP_WORKTREE_DIR:=${DEV_LOOP_STATE_DIR}/worktrees}"  # per-task git worktrees (outside the repo tree)
+: "${DEV_LOOP_TITLE:=auto}"       # auto updates the X11 window title; off disables it
+: "${DEV_LOOP_WINDOW_ID:=${WINDOWID:-}}"  # explicit override, primarily for launchers/tests
 export CRABBOX_PROVIDER DEV_LOOP_TTL DEV_LOOP_STALE DEV_LOOP_STATE_DIR DEV_LOOP_WORKTREE_DIR
+export DEV_LOOP_TITLE DEV_LOOP_WINDOW_ID
 
 # Stable, attributable owner id. Distinctness between two agents as the same
 # Unix user requires exporting DEV_LOOP_OWNER (see SKILL.md setup); the
@@ -152,6 +155,30 @@ dl_task_exists() {
   local uuid="$1" n
   n="$(dl_task_export "$uuid" | jq 'length' 2>/dev/null || echo 0)"
   [ "${n:-0}" = "1" ]
+}
+
+# dl_set_task_title <uuid> — best-effort X11 title for the worker terminal.
+# The stable UUID prefix identifies the task; the first five description words
+# keep the title useful in compact i3 title bars. Never fail task work because
+# a window manager, DISPLAY, WINDOWID, or xdotool is unavailable.
+dl_set_task_title() {
+  local uuid="$1" desc summary title window_id="${DEV_LOOP_WINDOW_ID:-}"
+  case "${DEV_LOOP_TITLE,,}" in
+    off|0|false|no) return 0 ;;
+  esac
+  [ -z "$DL_DRY_RUN" ] || return 0
+  [[ "$window_id" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] || return 0
+  command -v xdotool >/dev/null 2>&1 || return 0
+
+  desc="$(dl_task_field "$uuid" '.description // ""')"
+  summary="$(printf '%s' "$desc" | jq -Rrs '
+    gsub("[[:cntrl:]]"; " ")
+    | [splits("[[:space:]]+") | select(length > 0)][0:5]
+    | join(" ")
+  ' 2>/dev/null || true)"
+  [ -n "$summary" ] || summary="development task"
+  title="[${uuid:0:8}] ${summary}"
+  xdotool set_window --name "$title" "$window_id" >/dev/null 2>&1 || true
 }
 
 # owner_base <assignee> — strip any "#nonce" suffix for display and ownership

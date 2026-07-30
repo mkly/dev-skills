@@ -182,6 +182,7 @@ claim_one() {
   if [ -n "$owner" ] && [ "$owner" = "$DEV_LOOP_OWNER" ] && [ "$same_agent" -eq 1 ]; then
     if [ -z "$start" ]; then dl_do dl_task "$uuid" start; fi
     dl_log "re-claimed (already owned by you): $uuid"
+    dl_set_task_title "$uuid"
     printf '%s\n' "$uuid"
     return "$DL_OK"
   fi
@@ -238,6 +239,7 @@ claim_one() {
   fi
   dl_anno_event "$uuid" "claimed"
   dl_log "claimed: $uuid"
+  dl_set_task_title "$uuid"
   printf '%s\n' "$uuid"
   return "$DL_OK"
 }

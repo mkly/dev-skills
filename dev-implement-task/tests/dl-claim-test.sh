@@ -16,7 +16,17 @@ fail() {
 export TASKRC="$TMP/taskrc"
 export TASKDATA="$TMP/taskdata"
 export DEV_LOOP_STATE_DIR="$TMP/state"
+export DEV_LOOP_TITLE=auto
+export DEV_LOOP_WINDOW_ID=4242
 mkdir -p "$TASKDATA"
+mkdir -p "$TMP/bin"
+export TITLE_LOG="$TMP/title.log"
+cat >"$TMP/bin/xdotool" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TITLE_LOG"
+EOF
+chmod +x "$TMP/bin/xdotool"
+export PATH="$TMP/bin:$PATH"
 printf '%s\n' \
   'uda.assignee.type=string' \
   'uda.assignee.label=Assignee' \
@@ -25,7 +35,7 @@ printf '%s\n' \
 uuid="$(
   "$CREATE" --goal claim-test \
     --loop-id 11111111-1111-4111-8111-111111111111 \
-    --description 'claim exactly once' \
+    --description 'claim exactly once with extra ignored words' \
     --acceptance 'one concurrent owner wins' 2>"$TMP/create.err"
 )"
 
@@ -45,6 +55,9 @@ results="$(sort "$TMP"/*.rc)"
 
 winner="$(cat "$TMP/owner-a.out" "$TMP/owner-b.out")"
 [ "$winner" = "$uuid" ] || fail "winner did not print the exact task UUID"
+expected_title="set_window --name [${uuid:0:8}] claim exactly once with extra 4242"
+[ "$(cat "$TITLE_LOG")" = "$expected_title" ] \
+  || fail "claim title was not the short UUID plus five description words"
 
 task rc.context=none rc.json.array=on rc.verbose=nothing "$uuid" export \
   | jq -e '

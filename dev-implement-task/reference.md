@@ -42,6 +42,8 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `INCUS_REMOTE`        | (unset → local)                           | Optional `-incus-remote`; warmup only. |
 | `DEV_LOOP_STATE_DIR`  | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop` | Holds the `flock` lockfiles (`locks/`). |
 | `DEV_LOOP_WORKTREE_DIR` | `${DEV_LOOP_STATE_DIR}/worktrees`        | Parent dir for per-task git worktrees. Each task gets `<dir>/<repo-key>/<slug>` (a worktree on scratch branch `dl/<slug>`). Kept OUTSIDE the repo so worktrees never appear as untracked files. The `<repo-key>` is derived from `git rev-parse --git-common-dir`, so it is stable across a repo's own worktrees. |
+| `DEV_LOOP_TITLE`      | `auto`                                     | On a successful claim, update the worker's X11 window title to `[short-uuid] first five description words`. Set to `off`, `0`, `false`, or `no` to disable. |
+| `DEV_LOOP_WINDOW_ID`  | `$WINDOWID`                                 | X11 window ID to update. Launchers may override it; an absent/invalid ID or unavailable `xdotool` makes title updates a silent no-op. |
 | `DL_DRY_RUN`          | (unset)                                   | Non-empty → mutating ops are logged, not run (same as `--dry-run`). Reads still run. |
 
 Durations accept `90s`, `30m`, `2h`, `1d`, `2h30m`, or a bare integer (seconds).
@@ -107,7 +109,8 @@ the unconfigured-sync result described by dev-create-tasks.
    compares it: a matching owner with a different nonce is a concurrent agent
    and exits `10`.
 5. `task <uuid> start` (sets `+ACTIVE` and the `start` timestamp used for
-   staleness), annotate `claimed`, print the uuid.
+   staleness), annotate `claimed`, best-effort update the X11 title, then print
+   the uuid. Title handling never changes stdout or claim success.
 
 TaskChampion synchronization across separate replicas does not provide an
 atomic read-modify-write claim. Agents operating on different hosts or data

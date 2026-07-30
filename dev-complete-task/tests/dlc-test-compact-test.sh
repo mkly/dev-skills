@@ -32,12 +32,14 @@ cat >"$TMP/bin-rtk/rtk" <<'EOF'
 printf 'rtk-used\n' >>"$MOCK_RTK_MARKER"
 [ "${1:-}" = test ] || exit 91
 shift
-exec "$@"
+# Match RTK's command reconstruction closely enough to expose argv-boundary
+# loss when callers pass a multi-argument command directly.
+exec sh -c "$*"
 EOF
 
 cat >"$TMP/bin-rtk/probe" <<'EOF'
 #!/usr/bin/env bash
-printf 'arg=%s\n' "$1"
+printf '<%s>\n' "$@"
 exit 9
 EOF
 
@@ -56,15 +58,26 @@ git -C "$TMP/repo" branch review/compact
 export DLC_WORKTREE_DIR="$TMP/worktrees"
 export MOCK_RTK_MARKER="$TMP/rtk.marker"
 
+cat >"$TMP/expected.args" <<'EOF'
+<normal>
+<two words>
+<>
+<'single' and "double">
+<(left right)>
+<literal;$*?[]&|<>>
+EOF
+
+argv=(normal 'two words' '' "'single' and \"double\"" '(left right)' 'literal;$*?[]&|<>')
+
 set +e
 (
   cd "$TMP/repo"
-  PATH="$TMP/bin-rtk:/usr/bin:/bin" "$TEST_RUN" review/compact --compact -- probe 'two words'
+  PATH="$TMP/bin-rtk:/usr/bin:/bin" "$TEST_RUN" review/compact --compact -- probe "${argv[@]}"
 ) >"$TMP/compact.out" 2>"$TMP/compact.err"
 compact_rc=$?
 set -e
 [ "$compact_rc" -eq 9 ] || fail "compact review command exited $compact_rc, expected 9"
-[ "$(<"$TMP/compact.out")" = 'arg=two words' ] || fail "compact review mode changed arguments"
+cmp -s "$TMP/expected.args" "$TMP/compact.out" || fail "compact review mode changed arguments"
 [ "$(<"$TMP/rtk.marker")" = rtk-used ] || fail "compact review mode did not invoke in-box rtk test"
 
 rm -f "$TMP/rtk.marker"
@@ -76,7 +89,7 @@ set +e
 plain_rc=$?
 set -e
 [ "$plain_rc" -eq 9 ] || fail "plain review command exited $plain_rc, expected 9"
-[ "$(<"$TMP/plain.out")" = 'arg=plain mode' ] || fail "plain review mode changed arguments"
+[ "$(<"$TMP/plain.out")" = '<plain mode>' ] || fail "plain review mode changed arguments"
 [ ! -e "$TMP/rtk.marker" ] || fail "plain review mode unexpectedly invoked rtk"
 
 set +e
@@ -87,7 +100,7 @@ set +e
 fallback_rc=$?
 set -e
 [ "$fallback_rc" -eq 9 ] || fail "review fallback exited $fallback_rc, expected 9"
-[ "$(<"$TMP/fallback.out")" = 'arg=raw fallback' ] || fail "review fallback changed arguments"
+[ "$(<"$TMP/fallback.out")" = '<raw fallback>' ] || fail "review fallback changed arguments"
 [ ! -e "$TMP/rtk.marker" ] || fail "review fallback unexpectedly invoked rtk"
 grep -Fq -- '--compact requested but rtk is unavailable in box; running unfiltered' "$TMP/fallback.err" \
   || fail "review fallback warning was not emitted"
