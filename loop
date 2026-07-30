@@ -4,17 +4,19 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: loop --agent <codex|claude|agy> [--small]
+Usage: loop --agent <codex|claude|agy> [--small|--no-small]
             [--implement-task|--complete-task]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 Use --small to consider only pending tasks tagged +SMALL.
+Use --no-small to consider only pending tasks without the +SMALL tag.
 Use --implement-task or --complete-task to run only that lifecycle stage.
 EOF
 }
 
 agent=""
 small_only=false
+no_small=false
 implement_only=false
 complete_only=false
 
@@ -31,6 +33,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --small)
       small_only=true
+      shift
+      ;;
+    --no-small)
+      no_small=true
       shift
       ;;
     --implement-task)
@@ -52,6 +58,12 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if "$small_only" && "$no_small"; then
+  printf 'loop: --small and --no-small are mutually exclusive\n' >&2
+  usage >&2
+  exit 2
+fi
 
 if "$implement_only" && "$complete_only"; then
   printf 'loop: --implement-task and --complete-task are mutually exclusive\n' >&2
@@ -81,6 +93,10 @@ if "$small_only"; then
   task_filter+=(+SMALL)
   task_scope="pending +SMALL tasks"
   agent_scope="Only discover and process pending tasks tagged +SMALL; leave every other task untouched."
+elif "$no_small"; then
+  task_filter+=(-SMALL)
+  task_scope="pending tasks without +SMALL"
+  agent_scope="Only discover and process pending tasks that are not tagged +SMALL; leave +SMALL tasks untouched."
 fi
 
 if "$implement_only"; then

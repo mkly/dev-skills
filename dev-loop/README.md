@@ -24,7 +24,7 @@ integration branch.
 
 The repository-level `loop` executable polls Taskwarrior and launches the
 selected agent. For example, `./loop --agent codex` processes all pending work;
-add `--small`, `--implement-task`, or `--complete-task` to restrict its queue or
+add `--small`, `--no-small`, `--implement-task`, or `--complete-task` to restrict its queue or
 lifecycle stage.
 
 Taskwarrior repository projects are autonomous: every task uses the lowercase
