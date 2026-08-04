@@ -37,10 +37,12 @@ assignee and remains held through the terminal verdict. Release it with
 `dlc-release.sh "$uuid"` only when abandoning review without a verdict.
 
 Require matching repository/loop identity, acceptance, summary, commit range,
-and—when active—the current owner. Review correctness, regression risk, tests,
-security, secrets, and debug or attribution residue. When execution is needed,
-run isolated verification with `dlc-test.sh "$branch" --compact -- <command>`
-from `COMPLETE_SKILL`. Record one evidence-backed verdict.
+and—when active—the current owner. Review correctness, regression risk,
+security, secrets, and debug or attribution residue from the diff first; the
+suite takes 10+ minutes and is nearly always green, so treat it as a final
+gate, not a discovery tool. Run `dlc-test.sh "$branch" --compact -- <command>`
+from `COMPLETE_SKILL` only once the diff review clears — skip it if a finding
+already routes the branch to Findings. Record one evidence-backed verdict.
 
 ## Apply the verdict
 

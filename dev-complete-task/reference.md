@@ -164,6 +164,10 @@ scripts/dlc-test.sh "$branch" --compact -- bash -lc 'pytest -q'
 scripts/dlc-test.sh "$branch" --keep-box -- bash -lc 'make build'
 ```
 
+Run last, after the diff review clears — the suite takes 10+ minutes and is
+almost always green, so it's a final gate, not a way to find problems. Skip it
+if a finding already routes the branch to Findings.
+
 The helper checks out the branch in a dedicated external worktree, warms a
 short-lived lease, syncs tracked files, and forwards the command exit code. It
 does not reuse or mutate the producer's task box. `--compact` uses in-box RTK
