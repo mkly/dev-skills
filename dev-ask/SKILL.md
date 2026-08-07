@@ -18,9 +18,28 @@ Treat a failure as environmental when it comes from missing or broken tools,
 permissions, authentication, networking, required services, the sandbox, or a
 harness that also fails on a known-good baseline.
 
-Never respond by installing system software, changing global configuration,
-killing unrelated processes, bypassing the harness, weakening tests, retrying
-indefinitely, or silently reducing scope.
+Outside the generic base-image exception below, never respond by installing
+system software. Never change global configuration, kill unrelated processes,
+bypass the harness, weaken tests, retry indefinitely, or silently reduce scope.
+
+## Generic base-image exception
+
+Installing one required system package is a repair attempt only when reliable
+image metadata or harness configuration positively identifies the current
+environment as a generic base image, not a project-specific image. A repository
+checkout, an available package manager, or an inference from missing tools is
+not proof of the image type.
+
+Identify the exact package that supplies the missing prerequisite, then install
+only that package through the image's normal package manager; resolver-selected
+dependencies are allowed, but broad bundles, system upgrades, extra package
+sources, and unrelated packages are not. Record the command and result as one
+of the two environmental repair attempts, then rerun the original failing check
+unchanged. Do not skip, replace, or weaken that check.
+
+Never install a system package in a verified project-specific image. If the
+image type cannot be positively verified, stop and ask for the smallest user
+decision or repair needed to continue.
 
 ## Stop report
 
