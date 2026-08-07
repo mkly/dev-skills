@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Search"
+  short_description: "Research external technical facts before guessing"
+  default_prompt: "Use $dev-search to research this unfamiliar API and summarize the authoritative guidance."
