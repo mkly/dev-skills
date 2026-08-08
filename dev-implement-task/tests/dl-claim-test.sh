@@ -240,6 +240,44 @@ small_pick="$(DEV_LOOP_OWNER=small-worker "$CLAIM" \
 [ "$small_pick" = "$escalated" ] \
   || fail "ordinary worker did not pick returned task; got '$small_pick'"
 
+# `loop` binds a worker's queue through DEV_LOOP_ROUTE so the routing decision
+# survives an agent that never passes the flag. An explicit flag still wins.
+routed="$($CREATE --goal claim-test \
+  --loop-id 11111111-1111-4111-8111-111111111111 \
+  --description 'route inherited from the environment' \
+  --acceptance 'ambient route selects the large queue' \
+  2>"$TMP/routed-create.err")"
+task rc.confirmation=no rc.verbose=nothing "$routed" modify +LARGE >/dev/null
+
+set +e
+DEV_LOOP_OWNER=routed-worker DEV_LOOP_ROUTE=nonsense "$CLAIM" "$routed" \
+  >"$TMP/routed-bad.out" 2>"$TMP/routed-bad.err"
+routed_bad_rc=$?
+DEV_LOOP_OWNER=routed-worker "$CLAIM" "$routed" \
+  >"$TMP/routed-unset.out" 2>"$TMP/routed-unset.err"
+routed_unset_rc=$?
+DEV_LOOP_OWNER=routed-worker DEV_LOOP_ROUTE=large "$CLAIM" --standard "$routed" \
+  >"$TMP/routed-override.out" 2>"$TMP/routed-override.err"
+routed_override_rc=$?
+set -e
+[ "$routed_bad_rc" -eq 20 ] || fail "invalid DEV_LOOP_ROUTE exited $routed_bad_rc"
+grep -Fq 'DEV_LOOP_ROUTE must be standard, small, large, or plan' \
+  "$TMP/routed-bad.err" || fail "invalid DEV_LOOP_ROUTE was not diagnosed"
+[ "$routed_unset_rc" -eq 20 ] \
+  || fail "unrouted claim of +LARGE task exited $routed_unset_rc"
+[ "$routed_override_rc" -eq 20 ] \
+  || fail "--standard did not override DEV_LOOP_ROUTE=large"
+[ ! -s "$TMP/routed-override.out" ] \
+  || fail "--standard override claimed the +LARGE task"
+
+routed_pick="$(DEV_LOOP_OWNER=routed-worker DEV_LOOP_ROUTE=large "$CLAIM" \
+  "$routed" 2>"$TMP/routed-large.err")"
+[ "$routed_pick" = "$routed" ] \
+  || fail "DEV_LOOP_ROUTE=large did not select the escalated queue"
+task rc.confirmation=no rc.verbose=nothing "$routed" stop >/dev/null
+task rc.confirmation=no rc.verbose=nothing "$routed" modify assignee: >/dev/null
+task rc.confirmation=no rc.verbose=nothing "$routed" modify -LARGE >/dev/null
+
 # AGENT_PID is a controller-owned Linux PID, not a free-form claim nonce. Reject
 # fabricated identifiers before they can claim or start a task.
 pid_guard="$(

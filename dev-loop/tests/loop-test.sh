@@ -37,7 +37,8 @@ EOF
 for name in codex claude agy; do
   cat >"$TMP/bin/$name" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\t%s\t%s\n' "$(basename "$0")" "${AGENT_PID:-}" "$*" >>"$AGENT_LOG"
+printf '%s\t%s\t%s\t%s\n' "$(basename "$0")" "${AGENT_PID:-}" \
+  "${DEV_LOOP_ROUTE:-}" "$*" >>"$AGENT_LOG"
 EOF
 done
 chmod +x "$TMP/bin/"*
@@ -81,9 +82,15 @@ grep -Fq -- 'unknown argument: --wat' "$TMP/validation.err" \
 expect_2 --agent codex --implement-task --complete-task
 grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
   || fail "conflicting stage flags were not diagnosed"
-expect_2 --agent codex --small --no-small
+expect_2 --agent codex --small --large
 grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
   || fail "conflicting scope flags were not diagnosed"
+expect_2 --agent codex --standard --plan
+grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
+  || fail "--standard and --plan were not diagnosed as conflicting"
+expect_2 --agent codex --no-small
+grep -Fq -- 'unknown argument: --no-small' "$TMP/validation.err" \
+  || fail "the removed --no-small flag was silently accepted"
 
 clear_case
 printf '0\n' >"$TASK_COUNTS"
@@ -92,9 +99,9 @@ set +e
 idle_rc=$?
 set -e
 [ "$idle_rc" -eq 143 ] || fail "idle polling fixture exited $idle_rc"
-[ "$(<"$TASK_LOG")" = 'rc.verbose=nothing status:pending count' ] \
-  || fail "default poll did not inspect all pending tasks"
-grep -Fq 'No all pending tasks. Checking again in 5 seconds...' "$TMP/idle.out" \
+[ "$(<"$TASK_LOG")" = 'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' ] \
+  || fail "default poll did not inspect the standard queue"
+grep -Fq 'No pending standard-queue tasks. Checking again in 5 seconds...' "$TMP/idle.out" \
   || fail "idle poll was not reported"
 [ ! -s "$AGENT_LOG" ] || fail "an agent launched with no pending task"
 [ "$(<"$SLEEP_LOG")" = '5' ] || fail "idle poll did not wait five seconds"
@@ -117,9 +124,10 @@ check_agent() {
   set -e
 
   [ "$agent_rc" -eq 143 ] || fail "$selected restart fixture exited $agent_rc"
-  IFS=$'\t' read -r invoked pid arguments <"$AGENT_LOG"
+  IFS=$'\t' read -r invoked pid launched_route arguments <"$AGENT_LOG"
   [ "$invoked" = "$selected" ] || fail "$selected was not launched"
   [[ "$pid" =~ ^[0-9]+$ ]] || fail "$selected did not receive AGENT_PID"
+  [ -n "$launched_route" ] || fail "$selected did not inherit DEV_LOOP_ROUTE"
   case "$arguments" in
     "$expected_flags"*) ;;
     *) fail "$selected flags were incorrect: $arguments" ;;
@@ -140,34 +148,72 @@ check_agent() {
 }
 
 check_agent codex '--yolo ' loop \
-  'rc.verbose=nothing status:pending count' \
+  'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' \
   'Process each existing goal and loop separately'
-grep -Fq 'Process pending tasks regardless of whether they have the +SMALL tag.' \
-  "$AGENT_LOG" || fail "default prompt did not include non-small work"
+grep -Fq 'Only discover and process pending tasks tagged none of +SMALL, +LARGE, or +PLAN' \
+  "$AGENT_LOG" || fail "default prompt did not constrain the agent to the standard queue"
+grep -Fq 'Drain the existing pending standard-queue tasks' "$AGENT_LOG" \
+  || fail "default prompt described the wrong queue"
+
+# --standard is the explicit spelling of the default, so both must agree.
+check_agent codex '--yolo ' standard \
+  'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' \
+  'Drain the existing pending standard-queue tasks' --standard
 
 check_agent claude '--dangerously-skip-permissions ' implement \
-  'rc.verbose=nothing +READY -ACTIVE status:pending count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN count' \
   'Do not review, merge, or complete the task.' --implement-task
-grep -Fq '/skills dev-implement-task' "$AGENT_LOG" \
+grep -Fq 'dev-implement-task skill' "$AGENT_LOG" \
   || fail "implementation-only mode selected the wrong skill"
 
 check_agent agy '--dangerously-skip-permissions --prompt-interactive ' complete \
-  'rc.verbose=nothing +ACTIVE status:pending +SMALL export' \
+  'rc.verbose=nothing +ACTIVE status:pending +SMALL -LARGE -PLAN export' \
   'Do not claim or implement unrelated pending work.' --complete-task --small
-grep -Fq '/skills dev-complete-task' "$AGENT_LOG" \
+grep -Fq 'dev-complete-task skill' "$AGENT_LOG" \
   || fail "completion-only mode selected the wrong skill"
-grep -Fq 'Only discover and process pending tasks tagged +SMALL' "$AGENT_LOG" \
-  || fail "--small did not constrain the agent prompt"
+grep -Fq 'Only discover and process pending tasks tagged +SMALL and not escalated to +LARGE' \
+  "$AGENT_LOG" || fail "--small did not constrain the agent prompt"
 grep -Fq 'review-ready pending +SMALL tasks' "$AGENT_LOG" \
   || fail "--small completion prompt described the wrong queue"
 
-check_agent codex '--yolo ' loop \
-  'rc.verbose=nothing status:pending -SMALL count' \
-  'Process each existing goal and loop separately' --no-small
-grep -Fq 'Only discover and process pending tasks that are not tagged +SMALL' "$AGENT_LOG" \
-  || fail "--no-small did not constrain the agent prompt"
-grep -Fq 'Drain the existing pending tasks without +SMALL' "$AGENT_LOG" \
-  || fail "--no-small prompt described the wrong queue"
+# The escalated queue: counted exactly as dl-claim.sh --large claims it, and
+# never counted by any other queue.
+check_agent codex '--yolo ' large \
+  'rc.verbose=nothing status:pending +LARGE -PLAN count' \
+  'Drain the existing pending +LARGE escalated tasks' --large
+grep -Fq 'Only discover and process pending tasks tagged +LARGE' "$AGENT_LOG" \
+  || fail "--large did not constrain the agent prompt"
+grep -Fq 'resume its recorded worktree= and branch= annotations' "$AGENT_LOG" \
+  || fail "--large prompt omitted the escalation resume contract"
+grep -Fq 'remove the +LARGE tag, release the claim, and sync' "$AGENT_LOG" \
+  || fail "--large prompt omitted the escalation return path"
+
+check_agent codex '--yolo ' plan \
+  'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN count' \
+  'Do not implement, review, or merge any work the plan describes.' --plan
+
+# Every queue binds the claim through the environment the agent inherits, not
+# just through the prompt prose it may ignore.
+route_of() {
+  clear_case
+  printf '1\n' >"$TASK_COUNTS"
+  printf '%s\n' '[{"annotations":[{"description":"branch=review/test"},{"description":"summary: ready"}]}]' \
+    >"$TASK_EXPORT"
+  set +e
+  "$LOOP" --agent codex "$@" >/dev/null 2>&1
+  set -e
+  IFS=$'\t' read -r _ _ launched_route _ <"$AGENT_LOG"
+  printf '%s' "$launched_route"
+}
+
+for expected in standard small large plan; do
+  case "$expected" in
+    standard) actual="$(route_of)" ;;
+    *)        actual="$(route_of "--$expected")" ;;
+  esac
+  [ "$actual" = "$expected" ] \
+    || fail "queue $expected exported DEV_LOOP_ROUTE '$actual'"
+done
 
 clear_case
 printf '0\n' >"$TASK_COUNTS"
@@ -176,7 +222,7 @@ set +e
 implement_idle_rc=$?
 set -e
 [ "$implement_idle_rc" -eq 143 ] || fail "implementation idle fixture exited $implement_idle_rc"
-grep -Fq 'No claimable all pending tasks.' "$TMP/implement-idle.out" \
+grep -Fq 'No claimable pending standard-queue tasks.' "$TMP/implement-idle.out" \
   || fail "implementation-only mode did not idle without claimable work"
 [ ! -s "$AGENT_LOG" ] || fail "implementation-only mode launched without claimable work"
 
@@ -187,7 +233,7 @@ set +e
 complete_idle_rc=$?
 set -e
 [ "$complete_idle_rc" -eq 143 ] || fail "completion idle fixture exited $complete_idle_rc"
-grep -Fq 'No review-ready all pending tasks.' "$TMP/complete-idle.out" \
+grep -Fq 'No review-ready pending standard-queue tasks.' "$TMP/complete-idle.out" \
   || fail "completion-only mode did not idle without review-ready work"
 [ ! -s "$AGENT_LOG" ] || fail "completion-only mode launched without review-ready work"
 

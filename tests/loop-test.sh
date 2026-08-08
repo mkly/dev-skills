@@ -25,8 +25,11 @@ assert_error() {
 
 assert_error '--model requires a value' --agent codex --model
 assert_error '--effort requires a value' --agent codex --effort --small
-assert_error '--small and --no-small are mutually exclusive' \
-  --agent codex --model gpt-test --small --no-small
+assert_error '--standard, --small, --large, and --plan are mutually exclusive' \
+  --agent codex --model gpt-test --small --large
+assert_error '--standard, --small, --large, and --plan are mutually exclusive' \
+  --agent codex --model gpt-test --standard --plan
+assert_error 'unknown argument: --no-small' --agent codex --no-small
 
 help="$($ROOT/loop --help)"
 printf '%s\n' "$help" | grep -Fq -- '[--model <model>] [--effort <effort>]' || \

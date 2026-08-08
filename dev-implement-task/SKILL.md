@@ -31,7 +31,9 @@ keep the target repository as the current checkout. Use each bundled script's
 1. Run `$IMPLEMENT_SKILL/scripts/dl-setup.sh` once per machine or harness change.
 2. Inspect the task contract, then claim the explicit UUID with
    `$IMPLEMENT_SKILL/scripts/dl-claim.sh`. A controller must also pass its goal, loop ID, round,
-   and queue flag. Exit `10` means the claim was lost; do not work the task.
+   and queue flag; a worker launched by `loop` inherits its queue from
+   `DEV_LOOP_ROUTE` and must not pass a flag that contradicts it. Exit `10`
+   means the claim was lost; do not work the task.
 3. Run `$IMPLEMENT_SKILL/scripts/dl-box.sh "$uuid"` and wait for its real exit status. Poll the
    same yielded session through quiet warmup periods.
 4. Edit the recorded worktree. Add new files to Git before box runs because

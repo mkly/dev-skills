@@ -32,7 +32,9 @@ branches="$("$COMPLETE_SKILL/scripts/dlc-collect.sh" --from-task "$uuid")"
 ```
 
 Exit `10` means another agent is reviewing it; do not inspect, test, merge, or
-finalize that producer. The reviewer lock is independent of the implementation
+finalize that producer. Exit `20` with a queue message means the task belongs to
+another routing queue: the claim defaults to `DEV_LOOP_ROUTE`, so leave that work
+to its own `loop` worker instead of passing a contradicting queue flag. The reviewer lock is independent of the implementation
 assignee and remains held through the terminal verdict. Release it with
 `dlc-release.sh "$uuid"` only when abandoning review without a verdict.
 

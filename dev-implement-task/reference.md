@@ -33,6 +33,7 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | Variable              | Default                                  | Purpose |
 |-----------------------|------------------------------------------|---------|
 | `DEV_LOOP_OWNER`      | `loop`-generated per worker, else state file owner, else `$USER@$(hostname -s)` | Claim owner / lock identity. Must be **distinct per concurrent worker**: two workers sharing an owner are indistinguishable to `dl-claim.sh`. `loop` generates one per worker process; the state file (`~/.config/dev-loop/owner`) is a single-agent default and is shared by every agent on the host. For manual override, export a stable literal for the session; never use a dynamically re-expanded `$$-derived` value which changes per command and breaks locks. |
+| `DEV_LOOP_ROUTE`      | unset (→ the untagged standard queue)     | Routing queue (`standard`, `small`, `large`, `plan`) exported by `loop` from its queue flag. `dl-claim.sh` applies it as the default worker queue so a worker cannot claim outside the queue its poll counted; an explicit `--standard`/`--small`/`--large`/`--plan` overrides it, and any other value is a precondition error. |
 | `AGENT_PID`           | unset                                     | Calling agent's PID, exported by `loop`. Used as the claim nonce so an agent can re-claim its own task while a concurrent agent sharing its owner is still rejected. |
 | `CRABBOX_PROVIDER`    | `incus`                                   | Crabbox provider. Passed to **every** crabbox call (bare `crabbox list` defaults elsewhere and fails). |
 | `DEV_LOOP_TTL`        | `2h`                                      | Lease TTL passed to `crabbox warmup -ttl`. |
@@ -58,7 +59,7 @@ no effect until the next warmup.
 | Script              | Args                                              | stdout            | Notes |
 |---------------------|---------------------------------------------------|-------------------|-------|
 | `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
-| `dl-claim.sh`       | `[<uuid>] [--small\|--large] [--goal <slug>] [--loop-id <uuid>] [--loop-round <n>] [--steal-after <dur>] [--dry-run]` | claimed uuid | GitHub-origin identity/ready gate + host-wide flock + verified owner write. Default is untagged; flags select their worker queue. |
+| `dl-claim.sh`       | `[<uuid>] [--standard\|--small\|--large\|--plan] [--goal <slug>] [--loop-id <uuid>] [--loop-round <n>] [--steal-after <dur>] [--dry-run]` | claimed uuid | GitHub-origin identity/ready gate + host-wide flock + verified owner write. Default is untagged; flags select their worker queue, else `DEV_LOOP_ROUTE`. |
 | `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
 | `dl-run.sh`         | `<uuid> [--force] [--compact] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--compact` uses in-box RTK with raw fallback; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
@@ -96,6 +97,8 @@ the unconfigured-sync result described by dev-create-tasks.
    Optional goal, loop ID, and round flags bind a controller claim exactly.
    Default claims require no routing tag; `--small` requires `+SMALL` without
    `+LARGE`; `--large` requires `+LARGE` and takes precedence over `+SMALL`.
+   With no flag, `DEV_LOOP_ROUTE` supplies the queue; `--standard` is the
+   explicit spelling of the default and overrides it.
 2. Small randomized jitter de-synchronizes concurrent starts.
 3. `flock -w 10` on `$DEV_LOOP_STATE_DIR/locks/select.lock` (fd 9) — a true
    host-wide mutex around the multi-command claim. Both by-uuid and auto-pick
@@ -125,7 +128,8 @@ Outcomes: claimed → `0` + uuid; owned by another → `10`; bad/non-pending tas
 For a code problem a larger model can fix quickly, record `escalation:` and
 repeatable `attempt:` annotations, add `+LARGE`, sync, and release. The task's
 existing `worktree=` and `branch=` annotations carry its artifacts. Large
-workers claim with `dl-claim.sh --large`, edit and test the worktree, record
+workers run as `loop --large` (or claim directly with `dl-claim.sh --large`),
+resume the recorded worktree rather than creating one, edit and test it, record
 `escalation-result:`, remove `+LARGE`, release, and sync. Untagged tasks return
 to the standard queue; tasks that retained `+SMALL` return to the small queue.
 No additional resume marker exists.

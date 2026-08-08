@@ -66,7 +66,7 @@ code verbatim, including values that happen to equal `20` or `30`.
 | Script | Arguments | stdout | Mutation |
 |---|---|---|---|
 | `dlc-collect.sh` | `[--from-task <task-ref>]` | JSON branch array | none |
-| `dlc-claim.sh` | `<task-ref> [--steal-after <dur>]` | exact task UUID | reviewer annotations only |
+| `dlc-claim.sh` | `<task-ref> [--steal-after <dur>] [--standard\|--small\|--large\|--plan]` | exact task UUID | reviewer annotations only |
 | `dlc-release.sh` | `<task-ref>` | none | clears current reviewer annotations |
 | `dlc-diff.sh` | `<branch> [--stat-only] [-- <git flags>]` | log/diff | none |
 | `dlc-test.sh` | `<branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>` | command output | temporary worktree/lease only |
@@ -92,6 +92,7 @@ producer task's implementation lease:
 | `INCUS_TYPE` | unset | optional `container` or `vm` |
 | `INCUS_REMOTE` | unset | optional Incus remote |
 | `DEV_IMPLEMENT_TASK_SKILL_DIR` | sibling `../dev-implement-task` | installed implementation skill used by `dlc-done.sh` |
+| `DEV_LOOP_ROUTE` | unset (→ the untagged standard queue) | routing queue (`standard`, `small`, `large`, `plan`) exported by `loop`. `dlc-claim.sh` applies the same predicate as `dl-claim.sh`, so the queue that implemented a task is the queue that reviews it; an explicit `--standard`/`--small`/`--large`/`--plan` overrides it, and any other value is a precondition error (`20`). |
 
 `DLC_STATE_DIR/locks/review-select.lock` serializes reviewer claims on one host.
 The durable `reviewer=` annotation and exact readback detect lost Taskwarrior

@@ -93,8 +93,12 @@ For each claimable UUID:
    another task.
 
 For a code issue needing a larger worker, record the issue and attempt, add
-`+LARGE`, sync, release, and wait for the large worker's durable return. Do not
-misclassify box, permission, credential, or harness failures as code issues;
+`+LARGE`, sync, release, and await the separate `loop --large` worker's durable
+return. The state helper is queue-aware
+through `DEV_LOOP_ROUTE`: pending work on any other queue is reported as
+`delegated`, never claimable — awaited elsewhere, neither yours to claim nor
+grounds to declare the goal complete, so finish as `worker-idle` when nothing
+else is claimable. Do not misclassify box, permission, credential, or harness failures as code issues;
 invoke `dev-ask` only when such a failure occurs.
 
 Drain the round, clean merged ancestor branches, and verify every finding task

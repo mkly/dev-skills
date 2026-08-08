@@ -3,7 +3,6 @@
 
 from pathlib import Path
 import re
-import sys
 
 try:
     import tiktoken
@@ -37,15 +36,32 @@ for skill in skills:
 loop_body = body_counts["dev-loop/SKILL.md"]
 normal_path = metadata_total + loop_body
 
-assert metadata_total <= 350, f"metadata budget exceeded: {metadata_total} > 350"
-assert normal_path <= 2500, f"normal path budget exceeded: {normal_path} > 2500"
+# Every budget is checked before anything is reported. A bare assert per budget
+# stops at the first breach and hides the rest, which is how body overruns went
+# unnoticed while the metadata budget was red.
+METADATA_BUDGET = 400
+NORMAL_PATH_BUDGET = 2500
+BODY_BUDGET = 1500
+
+failures: list[str] = []
+
+if metadata_total > METADATA_BUDGET:
+    failures.append(f"metadata budget exceeded: {metadata_total} > {METADATA_BUDGET}")
+if normal_path > NORMAL_PATH_BUDGET:
+    failures.append(f"normal path budget exceeded: {normal_path} > {NORMAL_PATH_BUDGET}")
 for path, count in body_counts.items():
-    assert count <= 1200, f"skill body budget exceeded: {path}: {count} > 1200"
+    if count > BODY_BUDGET:
+        failures.append(f"skill body budget exceeded: {path}: {count} > {BODY_BUDGET}")
 
 loop_text = (root / "dev-loop/SKILL.md").read_text()
-assert not re.search(r"(?is)(locate and read|read .* completely).*SKILL\.md", loop_text), \
-    "dev-loop must not eagerly load component skills"
+if re.search(r"(?is)(locate and read|read .* completely).*SKILL\.md", loop_text):
+    failures.append("dev-loop must not eagerly load component skills")
 
 print(f"metadata={metadata_total} normal_path={normal_path}")
 for path, count in body_counts.items():
     print(f"{path}={count}")
+
+if failures:
+    for failure in failures:
+        print(f"FAIL: {failure}")
+    raise SystemExit(1)

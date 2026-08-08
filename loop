@@ -4,28 +4,37 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: loop --agent <codex|claude|agy> [--small|--no-small|--plan]
+Usage: loop --agent <codex|claude|agy> [--standard|--small|--large|--plan]
             [--implement-task|--complete-task]
             [--model <model>] [--effort <effort>]
+            [--prompt-suffix <text>]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
-Use --small to consider only pending tasks tagged +SMALL.
-Use --no-small to consider only pending tasks without the +SMALL tag.
-Use --plan to drain +PLAN decomposition tasks via dev-decompose-task;
-every other mode ignores +PLAN tasks.
+
+One worker drains exactly one routing queue, and the queue flags mirror the
+claim predicates in dl-claim.sh so this poll can never count a task the agent
+cannot claim:
+  --standard  untagged tasks (the default; neither +SMALL, +LARGE, nor +PLAN)
+  --small     trivial work tagged +SMALL and not escalated to +LARGE
+  --large     work escalated to +LARGE, for a larger-model worker
+  --plan      +PLAN decomposition tasks, drained via dev-decompose-task
+
 Use --implement-task or --complete-task to run only that lifecycle stage.
 Use --model and --effort to override the selected agent's defaults.
+Use --prompt-suffix to append extra instructions to the generated prompt.
 EOF
 }
 
 agent=""
+standard_only=false
 small_only=false
-no_small=false
+large_only=false
 plan_only=false
 implement_only=false
 complete_only=false
 model=""
 effort=""
+prompt_suffix=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -38,12 +47,16 @@ while [ "$#" -gt 0 ]; do
       agent="$2"
       shift 2
       ;;
+    --standard)
+      standard_only=true
+      shift
+      ;;
     --small)
       small_only=true
       shift
       ;;
-    --no-small)
-      no_small=true
+    --large)
+      large_only=true
       shift
       ;;
     --plan)
@@ -58,18 +71,18 @@ while [ "$#" -gt 0 ]; do
       complete_only=true
       shift
       ;;
-    --model|--effort)
+    --model|--effort|--prompt-suffix)
       option="$1"
       if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
         printf 'loop: %s requires a value\n' "$option" >&2
         usage >&2
         exit 2
       fi
-      if [ "$option" = "--model" ]; then
-        model="$2"
-      else
-        effort="$2"
-      fi
+      case "$option" in
+        --model) model="$2" ;;
+        --effort) effort="$2" ;;
+        --prompt-suffix) prompt_suffix="$2" ;;
+      esac
       shift 2
       ;;
     -h|--help)
@@ -84,14 +97,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if "$small_only" && "$no_small"; then
-  printf 'loop: --small and --no-small are mutually exclusive\n' >&2
-  usage >&2
-  exit 2
-fi
+routes_selected=0
+for selected in "$standard_only" "$small_only" "$large_only" "$plan_only"; do
+  "$selected" && routes_selected=$((routes_selected + 1))
+done
 
-if "$plan_only" && { "$small_only" || "$no_small"; }; then
-  printf 'loop: --plan cannot be combined with --small or --no-small\n' >&2
+if [ "$routes_selected" -gt 1 ]; then
+  printf 'loop: --standard, --small, --large, and --plan are mutually exclusive\n' >&2
   usage >&2
   exit 2
 fi
@@ -135,23 +147,37 @@ fi
 export DEV_LOOP_OWNER
 printf 'loop: worker owner %s\n' "$DEV_LOOP_OWNER"
 
-task_filter=(status:pending -PLAN)
-task_scope="all pending tasks"
-agent_scope="Process pending tasks regardless of whether they have the +SMALL tag."
-
+# One worker, one queue. Each filter is the Taskwarrior twin of a dl-claim.sh
+# identity branch, so a counted task is always a claimable task. Counting more
+# broadly than the claim predicate spins the poll loop: the count stays positive,
+# every launched agent claims nothing, and the loop relaunches every few seconds.
 if "$small_only"; then
-  task_filter+=(+SMALL)
+  route=small
+  task_filter=(status:pending +SMALL -LARGE -PLAN)
   task_scope="pending +SMALL tasks"
-  agent_scope="Only discover and process pending tasks tagged +SMALL; leave every other task untouched."
-elif "$no_small"; then
-  task_filter+=(-SMALL)
-  task_scope="pending tasks without +SMALL"
-  agent_scope="Only discover and process pending tasks that are not tagged +SMALL; leave +SMALL tasks untouched."
+  agent_scope="Only discover and process pending tasks tagged +SMALL and not escalated to +LARGE; leave every other task untouched."
+elif "$large_only"; then
+  route=large
+  task_filter=(status:pending +LARGE -PLAN)
+  task_scope="pending +LARGE escalated tasks"
+  agent_scope="Only discover and process pending tasks tagged +LARGE; leave every other task untouched."
 elif "$plan_only"; then
+  route=plan
   task_filter=(status:pending +PLAN)
   task_scope="pending +PLAN decomposition tasks"
   agent_scope="Only discover and process pending tasks tagged +PLAN; leave every other task untouched."
+else
+  route=standard
+  task_filter=(status:pending -SMALL -LARGE -PLAN)
+  task_scope="pending standard-queue tasks"
+  agent_scope="Only discover and process pending tasks tagged none of +SMALL, +LARGE, or +PLAN; leave every other task untouched."
 fi
+
+# The queue is bound to the claim itself, not just described in the prompt:
+# dl-claim.sh reads DEV_LOOP_ROUTE as its default routing flag, so an agent that
+# misreads the prose still cannot claim out of its queue.
+export DEV_LOOP_ROUTE="$route"
+printf 'loop: worker route %s\n' "$DEV_LOOP_ROUTE"
 
 if "$plan_only"; then
   task_filter=(+READY -ACTIVE "${task_filter[@]}")
@@ -167,6 +193,16 @@ elif "$complete_only"; then
   prompt="Use the dev-complete-task skill. Complete one existing implemented task from the ${task_scope} for this repository through review and final disposition only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations, including its branch annotation; do not derive a new goal from this prompt. ${agent_scope} Do not claim or implement unrelated pending work. Exit if no matching review-ready task exists."
 else
   prompt="Use the dev-loop skill. Drain the existing ${task_scope} for this repository. Inspect matching pending Taskwarrior tasks first and use each task's existing goal and loop-id annotations; do not derive a new goal from this prompt. Process each existing goal and loop separately until no matching task remains. ${agent_scope} Exit if no matching pending task exists."
+fi
+
+# An escalated task already owns a worktree and branch from the worker that gave
+# up on it, and its return path is durable state, not a resume tag.
+if "$large_only" && ! "$complete_only"; then
+  prompt="${prompt} The task is an escalation: resume its recorded worktree= and branch= annotations instead of creating new ones, read its escalation: and attempt: annotations before editing, and on success record an escalation-result: annotation, remove the +LARGE tag, release the claim, and sync so the task returns to the queue it came from."
+fi
+
+if [ -n "$prompt_suffix" ]; then
+  prompt="${prompt} ${prompt_suffix}"
 fi
 
 eligible_count() {

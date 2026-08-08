@@ -3,7 +3,8 @@
 #
 #   dl-claim.sh                      # auto-pick the highest-urgency READY task
 #   dl-claim.sh <uuid>               # claim a specific task
-#   dl-claim.sh [--small|--large|--plan] [--goal <slug>] [--loop-id <uuid>]
+#   dl-claim.sh [--standard|--small|--large|--plan]
+#               [--goal <slug>] [--loop-id <uuid>]
 #               [--loop-round <n>]
 #               [--steal-after <dur>] [--dry-run]
 #
@@ -27,10 +28,12 @@ usage() {
 Usage: dl-claim.sh [<uuid>] [identity filters] [--steal-after <dur>] [--dry-run]
 
   <uuid>          claim this specific task (default: auto-pick highest-urgency READY)
+  --standard      select only untagged tasks (the default queue); use it to
+                  override an ambient DEV_LOOP_ROUTE
   --small         select +SMALL tasks that are not escalated to +LARGE
   --large         select only +LARGE tasks
   --plan          select only +PLAN decomposition tasks; every other queue
-                  (default, --small, --large) excludes them
+                  (--standard, --small, --large) excludes them
   --goal <slug>   require this exact goal annotation
   --loop-id <id>  require this exact controller UUID annotation
   --loop-round <n> require this exact positive round annotation
@@ -50,8 +53,10 @@ LOOP_ROUND_FILTER=""
 LARGE_WORKER=0
 SMALL_WORKER=0
 PLAN_WORKER=0
+STANDARD_WORKER=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --standard)    STANDARD_WORKER=1 ;;
     --small)       SMALL_WORKER=1 ;;
     --large)       LARGE_WORKER=1 ;;
     --plan)        PLAN_WORKER=1 ;;
@@ -72,8 +77,24 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-[ $((SMALL_WORKER + LARGE_WORKER + PLAN_WORKER)) -le 1 ] \
-  || dl_die "$DL_PRECOND" "--small, --large, and --plan are mutually exclusive"
+[ $((STANDARD_WORKER + SMALL_WORKER + LARGE_WORKER + PLAN_WORKER)) -le 1 ] \
+  || dl_die "$DL_PRECOND" \
+    "--standard, --small, --large, and --plan are mutually exclusive"
+
+# A worker launched by `loop` inherits its queue through DEV_LOOP_ROUTE, so the
+# routing decision survives an agent that never passes the flag. An explicit
+# flag still wins, which is what --standard is for.
+if [ $((STANDARD_WORKER + SMALL_WORKER + LARGE_WORKER + PLAN_WORKER)) -eq 0 ] \
+  && [ -n "${DEV_LOOP_ROUTE:-}" ]; then
+  case "$DEV_LOOP_ROUTE" in
+    standard) ;;
+    small)    SMALL_WORKER=1 ;;
+    large)    LARGE_WORKER=1 ;;
+    plan)     PLAN_WORKER=1 ;;
+    *) dl_die "$DL_PRECOND" \
+         "DEV_LOOP_ROUTE must be standard, small, large, or plan (got '$DEV_LOOP_ROUTE')" ;;
+  esac
+fi
 
 if [ -n "$GOAL_FILTER" ] && ! [[ "$GOAL_FILTER" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
   dl_die "$DL_PRECOND" "--goal must be a lowercase slug"

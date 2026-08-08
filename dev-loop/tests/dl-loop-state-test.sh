@@ -72,6 +72,61 @@ printf '%s' "$stacked" | jq -e --arg producer "$producer" --arg followup "$follo
   and .queued_later[0].acceptance == ["review finding is fixed"]
 ' >/dev/null || fail "state advanced before the oldest pending round drained: $stacked"
 
+# Escalated and plan work belongs to `loop --large` and `loop --plan`; no other
+# queue's dl-claim.sh can accept it, so it must never be reported as claimable.
+escalated="$($CREATE --from-task "$producer" --description 'escalated parser fix' \
+  --acceptance 'escalated fix passes' 2>"$TMP/escalated.err")"
+task rc.confirmation=no rc.verbose=nothing "$escalated" modify +LARGE >/dev/null
+plan="$($CREATE --goal parser --loop-id "$loop_one" --plan \
+  --description 'decompose parser rewrite' --acceptance 'plan lists tasks' \
+  2>"$TMP/plan.err")"
+
+routed="$($STATE --goal parser --loop-id "$loop_one")"
+printf '%s' "$routed" | jq -e --arg escalated "$escalated" --arg plan "$plan" '
+  ([.pending[].uuid] | index($escalated)) == null
+  and ([.pending[].uuid] | index($plan)) == null
+  and ([.delegated[].uuid] | index($plan)) != null
+  and ([.delegated[], .queued_later[]] | map(select(.uuid == $plan))[0].route) == "plan"
+  and ([.delegated[], .queued_later[]] | map(select(.uuid == $escalated))[0].route) == "large"
+' >/dev/null || fail "routed work was offered to the wrong queue: $routed"
+
+# The partition is relative to the worker's own queue, not to a fixed set of
+# tags: each queue sees its own work as claimable and everything else delegated.
+plan_view="$(DEV_LOOP_ROUTE=plan $STATE --goal parser --loop-id "$loop_one")"
+printf '%s' "$plan_view" | jq -e --arg plan "$plan" --arg producer "$producer" '
+  .route == "plan" and .state == "claim"
+  and [.pending[].uuid] == [$plan]
+  and ([.delegated[].uuid] | index($producer)) != null
+' >/dev/null || fail "the plan queue did not see its own task: $plan_view"
+
+large_view="$($STATE --goal parser --loop-id "$loop_one" --route large)"
+printf '%s' "$large_view" | jq -e --arg producer "$producer" '
+  .route == "large" and (.pending | length) == 0
+  and .state == "delegated"
+  and ([.delegated[].uuid] | index($producer)) != null
+' >/dev/null || fail "the large queue claimed another queue's work: $large_view"
+
+set +e
+DEV_LOOP_ROUTE=nonsense $STATE --goal parser --loop-id "$loop_one" \
+  >/dev/null 2>"$TMP/bad-route.err"
+bad_route_rc=$?
+set -e
+[ "$bad_route_rc" -eq 20 ] || fail "invalid DEV_LOOP_ROUTE exited $bad_route_rc"
+grep -Fq -e '--route must be standard, small, large, or plan' "$TMP/bad-route.err" \
+  || fail "invalid DEV_LOOP_ROUTE was not diagnosed"
+
+# With every claimable task drained, pending routed work must read as awaited
+# elsewhere rather than as claimable or complete.
+task rc.confirmation=no rc.verbose=nothing "$producer" 'done' >/dev/null
+task rc.confirmation=no rc.verbose=nothing "$followup" 'done' >/dev/null
+git branch -q -D "$review_branch"
+delegated_state="$($STATE --goal parser --loop-id "$loop_one")"
+printf '%s' "$delegated_state" | jq -e '
+  .state == "delegated" and .counts.delegated >= 1
+  and (.pending | length) == 0
+  and ([.delegated[].route] | sort | unique | inside(["large", "plan"]))
+' >/dev/null || fail "awaited routed work was not reported as delegated: $delegated_state"
+
 loop_two="22222222-2222-4222-8222-222222222222"
 $CREATE --goal parser --loop-id "$loop_two" --description 'other parser' \
   --acceptance 'other parser checks pass' >"$TMP/other.uuid" 2>"$TMP/other.err"

@@ -117,6 +117,50 @@ DEV_LOOP_OWNER=reviewer-c AGENT_PID=1003 "$CLAIM" "$uuid" --steal-after 1h \
   >"$TMP/steal.out" 2>"$TMP/steal.err" \
   || fail "stale reviewer claim could not be taken over"
 
+# Routing holds at the review stage too: the queue that implemented a task is
+# the queue that reviews it, so a wrong-sized worker is refused rather than
+# quietly disposing of work meant for another model.
+DEV_LOOP_OWNER=reviewer-c AGENT_PID=1003 "$RELEASE" "$uuid" >/dev/null 2>&1 \
+  || fail "reviewer-c could not release before the routing checks"
+task rc.confirmation=no rc.verbose=nothing "$uuid" modify +LARGE >/dev/null
+
+set +e
+DEV_LOOP_OWNER=reviewer-d AGENT_PID=1004 "$CLAIM" "$uuid" \
+  >"$TMP/standard-route.out" 2>"$TMP/standard-route.err"
+standard_route_rc=$?
+set -e
+[ "$standard_route_rc" -eq 20 ] \
+  || fail "standard reviewer claimed a +LARGE task (exit $standard_route_rc)"
+grep -Fq 'is not on the standard queue' "$TMP/standard-route.err" \
+  || fail "wrong-queue review was not diagnosed"
+[ ! -s "$TMP/standard-route.out" ] || fail "refused review still printed a UUID"
+
+set +e
+DEV_LOOP_ROUTE=nonsense DEV_LOOP_OWNER=reviewer-d AGENT_PID=1004 \
+  "$CLAIM" "$uuid" >/dev/null 2>"$TMP/bad-route.err"
+bad_route_rc=$?
+set -e
+[ "$bad_route_rc" -eq 20 ] || fail "invalid DEV_LOOP_ROUTE exited $bad_route_rc"
+grep -Fq 'DEV_LOOP_ROUTE must be standard, small, large, or plan' "$TMP/bad-route.err" \
+  || fail "invalid DEV_LOOP_ROUTE was not diagnosed"
+
+set +e
+DEV_LOOP_ROUTE=large DEV_LOOP_OWNER=reviewer-d AGENT_PID=1004 \
+  "$CLAIM" "$uuid" --standard >/dev/null 2>"$TMP/override.err"
+override_rc=$?
+set -e
+[ "$override_rc" -eq 20 ] \
+  || fail "an explicit --standard did not override DEV_LOOP_ROUTE (exit $override_rc)"
+
+DEV_LOOP_ROUTE=large DEV_LOOP_OWNER=reviewer-d AGENT_PID=1004 "$CLAIM" "$uuid" \
+  >"$TMP/large-route.out" 2>"$TMP/large-route.err" \
+  || fail "the large reviewer could not claim its own escalated task"
+task rc.confirmation=no rc.verbose=nothing "$uuid" modify -LARGE >/dev/null
+DEV_LOOP_OWNER=reviewer-d AGENT_PID=1004 "$RELEASE" "$uuid" >/dev/null 2>&1 \
+  || fail "reviewer-d could not release the routed claim"
+DEV_LOOP_OWNER=reviewer-c AGENT_PID=1003 "$CLAIM" "$uuid" >/dev/null 2>&1 \
+  || fail "the returned task could not be reclaimed by its original queue"
+
 DEV_LOOP_OWNER=reviewer-c AGENT_PID=1003 "$STATUS" \
   >"$TMP/status.out" 2>"$TMP/status.err"
 grep -Fq 'Active reviews:' "$TMP/status.out" \

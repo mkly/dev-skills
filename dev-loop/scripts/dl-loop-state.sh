@@ -15,10 +15,16 @@ COMPLETE_DIR="$(cd "$SCRIPT_DIR/../../dev-complete-task/scripts" && pwd)"
 usage() {
   cat >&2 <<'EOF'
 Usage: dl-loop-state.sh --goal <slug> [--loop-id <uuid>]
+                        [--route <standard|small|large|plan>]
 
 Derives repository identity, selects the sole active loop for the goal, and
 prints compact JSON describing actionable tasks and review branches. When no
 active loop exists, returns state=new with a freshly proposed loop ID.
+
+--route names the queue this worker drains, defaulting to DEV_LOOP_ROUTE and
+then to standard. Only tasks on that route are reported as claimable; pending
+work on other routes is reported as delegated, since the claim helpers refuse
+it. State delegated means the round still has work, but not this worker's.
 
 Read-only. Exit: 0 success, 20 usage/precondition/contradictory active loops.
 EOF
@@ -26,8 +32,14 @@ EOF
 
 GOAL=""
 LOOP_ID=""
+ROUTE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --route)
+      shift
+      [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--route needs a value"; }
+      ROUTE="$1"
+      ;;
     --goal)
       shift
       [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--goal needs a value"; }
@@ -51,6 +63,15 @@ if [ -n "$LOOP_ID" ]; then
   [[ "$LOOP_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
     || dl_die "$DL_PRECOND" "--loop-id must be a UUID"
 fi
+
+# A worker launched by `loop` inherits its queue through DEV_LOOP_ROUTE, the
+# same binding dl-claim.sh reads, so both agree on what this worker may claim.
+[ -n "$ROUTE" ] || ROUTE="${DEV_LOOP_ROUTE:-standard}"
+case "$ROUTE" in
+  standard|small|large|plan) ;;
+  *) dl_die "$DL_PRECOND" \
+       "--route must be standard, small, large, or plan (got '$ROUTE')" ;;
+esac
 
 dl_require task jq git
 dl_resolve_repo_identity
@@ -137,7 +158,8 @@ normalized="$(printf '%s' "$selected" | jq "$JQ_DEFS"'
     uuid, short: .uuid[0:8], description,
     status, start: (.start // ""), assignee: (.assignee // ""),
     loop_round: (note("loop-round") | tonumber? // 0),
-    route: (if ((.tags // []) | index("LARGE")) then "large"
+    route: (if ((.tags // []) | index("PLAN")) then "plan"
+            elif ((.tags // []) | index("LARGE")) then "large"
             elif ((.tags // []) | index("SMALL")) then "small" else "standard" end),
     depends: (.depends // []), input: note("input"), review_of: note("review-of"),
     acceptance: notes("acceptance"), summary: notes("summary"),
@@ -160,30 +182,45 @@ fi
 
 jq -n \
   --arg project "$DL_REPO_PROJECT" --arg repo_id "$DL_REPO_ID" \
-  --arg goal "$GOAL" --arg loop_id "$LOOP_ID" \
+  --arg goal "$GOAL" --arg loop_id "$LOOP_ID" --arg route "$ROUTE" \
   --argjson round "$current_round" --argjson tasks "$normalized" \
   --argjson reviews "$reviews" '
   def current_pending: [$tasks[] | select(.status == "pending" and .loop_round == $round)];
-  def implemented: [current_pending[] | select(.branch != "" and (.summary | length) > 0)];
-  def active: [current_pending[] | select(.start != "")];
+  # One worker drains one queue at every stage, so this controller can only
+  # claim tasks on its own route; dl-claim.sh and dlc-claim.sh refuse the rest.
+  # Reporting a task from another queue as claimable would send this controller
+  # work it can never claim, which is how a poll loop spins. Such work is
+  # surfaced as delegated instead: pending, but awaited elsewhere.
+  def claimable: [current_pending[] | select(.route == $route)];
+  def delegated: [current_pending[] | select(.route != $route)];
+  def implemented: [claimable[] | select(.branch != "" and (.summary | length) > 0)];
+  def active: [claimable[] | select(.start != "")];
+  # A review branch belonging to a delegated task belongs to that other queue.
+  def unmerged_own: ([delegated[].uuid]) as $elsewhere
+    | [$reviews[]
+       | select(.merged | not)
+       | select(($elsewhere | index(.task.uuid // "")) == null)];
   {
     project: $project, repo_id: $repo_id, goal: $goal, loop_id: $loop_id,
-    current_round: $round,
+    current_round: $round, route: $route,
     state: (if ($tasks | length) == 0 then "new"
             elif (implemented | length) > 0 then "review"
             elif (active | length) > 0 then "implementing"
-            elif (current_pending | length) > 0 then "claim"
-            elif ([$reviews[] | select(.merged | not)] | length) > 0 then "review"
+            elif (claimable | length) > 0 then "claim"
+            elif (unmerged_own | length) > 0 then "review"
+            elif (delegated | length) > 0 then "delegated"
             else "complete" end),
     counts: {
       total: ($tasks | length),
       pending: ([$tasks[] | select(.status == "pending")] | length),
       queued_later: ([$tasks[] | select(.status == "pending" and .loop_round > $round)] | length),
       active: (active | length),
+      delegated: (delegated | length),
       completed: ([$tasks[] | select(.status == "completed")] | length),
       review_branches: ($reviews | length)
     },
-    pending: current_pending,
+    pending: claimable,
+    delegated: delegated,
     queued_later: [$tasks[] | select(.status == "pending" and .loop_round > $round)],
     completed: [$tasks[] | select(.status == "completed")
       | {uuid, short, loop_round, description, branch, summary}],

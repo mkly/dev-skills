@@ -17,15 +17,23 @@ dev-create-tasks → dev-implement-task → dev-complete-task
 
 For end-to-end runs, the controller uses sibling scripts directly instead of
 loading every component skill body. `dev-loop/scripts/dl-loop-state.sh` provides
-read-only goal/round state as compact JSON.
+read-only goal/round state as compact JSON, relative to the worker's own queue:
+`--route` (defaulting to `DEV_LOOP_ROUTE`, then `standard`) decides what counts
+as claimable, and pending work tagged for any other queue is reported as
+`delegated` instead, since the claim helpers refuse it. `dlc-claim.sh` applies
+the same predicate at review time, so one queue implements and reviews a task
+end to end.
 
 No stage pushes to a remote. Only completion merges into the current local
 integration branch.
 
 The repository-level `loop` executable polls Taskwarrior and launches the
-selected agent. For example, `./loop --agent codex` processes all pending work;
-add `--small`, `--no-small`, `--implement-task`, or `--complete-task` to restrict its queue or
-lifecycle stage.
+selected agent. One worker drains one routing queue: `./loop --agent codex`
+processes the standard (untagged) queue, and `--standard`, `--small`,
+`--large`, or `--plan` selects a queue explicitly. Add `--implement-task` or
+`--complete-task` to restrict the lifecycle stage. Each queue flag mirrors a
+`dl-claim.sh` claim predicate and is exported to the agent as
+`DEV_LOOP_ROUTE`, so a worker can never count work it cannot claim.
 
 Taskwarrior repository projects are autonomous: every task uses the lowercase
 basename of the GitHub `origin` URL. Goal runs are isolated by `goal:` and a
@@ -74,8 +82,9 @@ Lifecycle state continues to use `base=`, `box=`, `worktree=`, `branch=`,
 `repo-id:`, `goal:`, `loop-id:`, and `loop-round:` for repository and controller
 scoping. Untagged tasks use the standard queue, `+SMALL` routes trivial work to
 smaller-model workers, and `+LARGE` routes escalated work to larger-model
-workers. `+LARGE` takes precedence when both tags exist; removing it restores
-the prior small or standard queue without a resume tag.
+workers started with `loop --large`. `+LARGE` takes precedence when both tags
+exist; removing it restores the prior small or standard queue without a resume
+tag.
 
 ## Persistent worker exit
 
