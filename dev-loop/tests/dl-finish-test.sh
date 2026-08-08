@@ -19,6 +19,31 @@ NOTIFY_OUT="$TMP/event" AGENT_NOTIFY="$TMP/notify" \
 [ "$(<"$TMP/event")" = $'task-completed\tabc' ] \
   || fail "notification payload was incorrect"
 
+# The marker is how `loop` tells a finished run from an agent that merely
+# stopped talking; without it the poll relaunches into work still in flight.
+DEV_LOOP_FINISH_MARKER="$TMP/marker" "$FINISH" worker-idle
+[ "$(<"$TMP/marker")" = 'worker-idle ' ] \
+  || fail "the finish marker did not record the event: $(<"$TMP/marker")"
+
+DEV_LOOP_FINISH_MARKER="$TMP/marker" "$FINISH" goal-completed loop-7
+[ "$(<"$TMP/marker")" = 'goal-completed loop-7' ] \
+  || fail "the finish marker did not record the reference: $(<"$TMP/marker")"
+
+# An unset marker is valid and must stay a no-op.
+"$FINISH" task-completed abc || fail "an unset marker path broke the finish call"
+
+# An unwritable marker must not fail the run it is only observing.
+DEV_LOOP_FINISH_MARKER="$TMP/nonexistent-dir/marker" "$FINISH" worker-idle \
+  || fail "an unwritable marker path failed the finish call"
+
+# A rejected event writes no marker, so the loop still treats the run as
+# abandoned rather than crediting an invalid finish.
+rm -f "$TMP/marker"
+set +e
+DEV_LOOP_FINISH_MARKER="$TMP/marker" "$FINISH" typo >/dev/null 2>&1
+set -e
+[ ! -e "$TMP/marker" ] || fail "an unknown event still wrote a finish marker"
+
 set +e
 AGENT_PID=invalid "$FINISH" worker-idle >"$TMP/pid.out" 2>"$TMP/pid.err"
 pid_rc=$?

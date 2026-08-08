@@ -147,6 +147,26 @@ fi
 export DEV_LOOP_OWNER
 printf 'loop: worker owner %s\n' "$DEV_LOOP_OWNER"
 
+# dl-finish.sh is the declared end of every run, but an agent process exiting
+# says nothing about whether it got there. An agent that ends its turn partway
+# through — waiting on a box test gate, say, expecting to be re-invoked when the
+# suite reports back — exits exactly like one that finished, and the poll below
+# used to relaunch into the same queue 30 seconds later regardless. The
+# abandoned review keeps its claim, its worktree, and its running box, so each
+# relaunch adds another set: that is how one queue drain ended up with ten boxes
+# live at once and starved the host of memory.
+#
+# dl-finish.sh writes its event here, so an empty marker after run_agent means
+# the run was abandoned rather than finished. The path is per loop process and
+# is reused by every run, cleared before each one.
+DEV_LOOP_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dev-loop-run.XXXXXX")" || {
+  printf 'loop: could not create a run-state directory\n' >&2
+  exit 1
+}
+trap 'rm -rf "$DEV_LOOP_RUN_DIR"' EXIT
+DEV_LOOP_FINISH_MARKER="$DEV_LOOP_RUN_DIR/finish"
+export DEV_LOOP_FINISH_MARKER
+
 # One worker, one queue. Each filter is the Taskwarrior twin of a dl-claim.sh
 # identity branch, so a counted task is always a claimable task. Counting more
 # broadly than the claim predicate spins the poll loop: the count stays positive,
@@ -239,12 +259,33 @@ count_claimable() {
 
 # Review-ready: started work that reached a review branch and a summary, which
 # is what dev-complete-task picks up regardless of which worker implemented it.
+#
+# The reviewer lock is the ownership half of dlc-claim.sh's predicate, and it is
+# separate from the implementation assignee: a producer under review stays
+# +ACTIVE with its branch= and summary: annotations intact. Counting it anyway
+# is the mistake count_claimable's comment above describes — dlc-claim.sh has no
+# default steal window, so a held task exits 10 for every agent this loop
+# launches, the count never falls to zero, and the poll relaunches forever.
+#
+# Excluding held tasks makes an abandoned review show up as an idle queue rather
+# than as a relaunch storm. That is the honest report: the lock outlives the
+# agent that took it, and clearing it is dlc-release.sh's job or an explicit
+# dlc-claim.sh --steal-after, neither of which this poll should second-guess.
+#
+# Taskwarrior annotations accumulate rather than replace, and dlc-release.sh
+# releases by appending an empty `reviewer=`. So the lock is the *last*
+# `reviewer=` annotation, exactly as dlc_anno_get reads it; testing for the
+# key's presence instead would hide every released task from the queue forever.
 count_completable() {
   local n
   n="$(task rc.verbose=nothing +ACTIVE "${queue_filter[@]}" export | jq '
     [ .[]
       | select(any(.annotations[]?; .description | startswith("branch=")))
       | select(any(.annotations[]?; .description | startswith("summary: ")))
+      | select(
+          [ .annotations[]?.description | select(startswith("reviewer=")) ]
+          | (last // "reviewer=") == "reviewer="
+        )
     ] | length
   ' 2>/dev/null)" || n=""
   numeric_count "review-ready ${task_scope}" "$n"
@@ -297,6 +338,14 @@ run_agent() {
   esac
 }
 
+# Consecutive runs that ended without dl-finish.sh. Each one abandoned a claim,
+# a worktree, and possibly a running box, and relaunching immediately only adds
+# another of each. Back off instead, and stop rather than accumulate them
+# without limit: three abandoned runs in a row is a defect in the agent or the
+# skill, and no amount of further relaunching resolves it.
+abandoned=0
+max_abandoned=3
+
 while true; do
   pending_count="$(eligible_count)"
 
@@ -306,10 +355,36 @@ while true; do
     continue
   fi
 
-  run_agent
-  printf 'Restarting in 30 seconds...\n'
+  : >"$DEV_LOOP_FINISH_MARKER"
+  run_status=0
+  run_agent || run_status=$?
+
+  # The terminal is reset before reporting, not after: resetting afterwards
+  # scrolls every diagnostic below out of view the moment it is printed.
   if [ -t 1 ]; then
     reset
   fi
-  sleep 30
+
+  if [ -s "$DEV_LOOP_FINISH_MARKER" ]; then
+    abandoned=0
+    delay=30
+    printf 'loop: run finished (%s).\n' "$(tr -d '\n' <"$DEV_LOOP_FINISH_MARKER")"
+  else
+    abandoned=$(( abandoned + 1 ))
+    printf 'loop: run %d of %d ended without dl-finish.sh (agent exit %d).\n' \
+      "$abandoned" "$max_abandoned" "$run_status" >&2
+    printf 'loop: its claim, worktree, and any box it leased are still held.\n' >&2
+    if [ "$abandoned" -ge "$max_abandoned" ]; then
+      printf 'loop: stopping rather than leasing more. Inspect the orphaned\n' >&2
+      printf 'loop: resources with dl-status.sh, release stale reviewer claims\n' >&2
+      printf 'loop: with dlc-release.sh, then restart this worker.\n' >&2
+      exit 1
+    fi
+    # Doubling buys a long-running box gate time to finish and the agent time
+    # to be restarted deliberately, without pretending the run succeeded.
+    delay=$(( 30 * (1 << abandoned) ))
+  fi
+
+  printf 'Restarting in %d seconds...\n' "$delay"
+  sleep "$delay"
 done

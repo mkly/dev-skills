@@ -131,8 +131,17 @@ it.
 
 Report first, then run it. Nothing follows it: no summary, no verification, no
 closing message. Reaching the end of your turn without it is an incomplete run,
-not a finished one — the worker process stays alive holding its queue, and the
-poll loop launches nothing until someone kills it by hand.
+not a finished one, and nothing waits for you to come back: your process exits,
+the poll loop sees an eligible queue, and it launches a replacement worker that
+starts its own review and leases its own box while yours is still running.
+
+That failure mode has one common cause, so treat it as a rule: **never end your
+turn while a command is still running.** `dlc-test.sh` takes 10+ minutes in a
+box, and there is no re-invocation when it reports back — announcing that you
+will pick the result up later ends the run then and there, abandoning the
+reviewer lock, the worktree, and the box. Wait for the command's real exit
+status and act on it in the same turn. If you genuinely cannot, release the lock
+with `dlc-release.sh` and finish as `worker-idle` so the queue is left clean.
 
 Preserve inherited `AGENT_PID` and `AGENT_NOTIFY` verbatim so the command can
 notify the controller and terminate the worker; never alter either value to make

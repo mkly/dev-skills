@@ -10,23 +10,22 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$TMP/bin"
 
+# Every count is an `export` piped through jq, so the fixture is the task JSON
+# and the log records which filter asked for it.
 cat >"$TMP/bin/task" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$TASK_LOG"
-if [ "${!#}" = export ]; then
-  cat "$TASK_EXPORT"
-  exit
-fi
-count="$(head -n 1 "$TASK_COUNTS")"
-tail -n +2 "$TASK_COUNTS" >"$TASK_COUNTS.next"
-mv "$TASK_COUNTS.next" "$TASK_COUNTS"
-printf '%s\n' "$count"
+cat "$TASK_EXPORT"
 EOF
 
+# Ends the fixture by killing the loop once it has slept SLEEP_MAX times, so a
+# case can observe several iterations before the process goes away.
 cat >"$TMP/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$SLEEP_LOG"
-kill -TERM "$PPID"
+if [ "$(wc -l <"$SLEEP_LOG")" -ge "${SLEEP_MAX:-1}" ]; then
+  kill -TERM "$PPID"
+fi
 EOF
 
 cat >"$TMP/bin/reset" <<'EOF'
@@ -34,22 +33,32 @@ cat >"$TMP/bin/reset" <<'EOF'
 printf 'reset\n' >>"$RESET_LOG"
 EOF
 
+# AGENT_FINISH makes the fake agent call the one thing a real run must end with.
+# Leaving it unset is the abandoned-run case: the process exits having written
+# no marker, exactly like an agent that ended its turn waiting on a box gate.
 for name in codex claude agy; do
   cat >"$TMP/bin/$name" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\t%s\t%s\t%s\n' "$(basename "$0")" "${AGENT_PID:-}" \
   "${DEV_LOOP_ROUTE:-}" "$*" >>"$AGENT_LOG"
+if [ -n "${AGENT_FINISH:-}" ] && [ -n "${DEV_LOOP_FINISH_MARKER:-}" ]; then
+  printf 'task-completed fixture\n' >"$DEV_LOOP_FINISH_MARKER"
+fi
+exit "${AGENT_EXIT:-0}"
 EOF
 done
 chmod +x "$TMP/bin/"*
 
 export PATH="$TMP/bin:$PATH"
 export TASK_LOG="$TMP/task.log"
-export TASK_COUNTS="$TMP/task-counts"
 export TASK_EXPORT="$TMP/task-export.json"
 export SLEEP_LOG="$TMP/sleep.log"
 export RESET_LOG="$TMP/reset.log"
 export AGENT_LOG="$TMP/agent.log"
+export AGENT_FINISH=1
+
+# One review-ready producer: a recorded branch, a summary, no reviewer lock.
+READY_TASK='[{"annotations":[{"description":"branch=review/test"},{"description":"summary: ready"}]}]'
 
 clear_case() {
   : >"$TASK_LOG"
@@ -57,6 +66,7 @@ clear_case() {
   : >"$RESET_LOG"
   : >"$AGENT_LOG"
   printf '[]\n' >"$TASK_EXPORT"
+  unset SLEEP_MAX AGENT_EXIT
 }
 
 expect_2() {
@@ -93,18 +103,19 @@ grep -Fq -- 'unknown argument: --no-small' "$TMP/validation.err" \
   || fail "the removed --no-small flag was silently accepted"
 
 clear_case
-printf '0\n' >"$TASK_COUNTS"
 set +e
 "$LOOP" --agent codex >"$TMP/idle.out" 2>"$TMP/idle.err"
 idle_rc=$?
 set -e
 [ "$idle_rc" -eq 143 ] || fail "idle polling fixture exited $idle_rc"
-[ "$(<"$TASK_LOG")" = 'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' ] \
-  || fail "default poll did not inspect the standard queue"
-grep -Fq 'No pending standard-queue tasks. Checking again in 5 seconds...' "$TMP/idle.out" \
+grep -Fq 'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN export' "$TASK_LOG" \
+  || fail "default poll did not count the standard queue's claimable work"
+grep -Fq 'rc.verbose=nothing +ACTIVE status:pending -SMALL -LARGE -PLAN export' "$TASK_LOG" \
+  || fail "default poll did not count the standard queue's review-ready work"
+grep -Fq 'No pending standard-queue tasks. Checking again in 30 seconds...' "$TMP/idle.out" \
   || fail "idle poll was not reported"
 [ ! -s "$AGENT_LOG" ] || fail "an agent launched with no pending task"
-[ "$(<"$SLEEP_LOG")" = '5' ] || fail "idle poll did not wait five seconds"
+[ "$(<"$SLEEP_LOG")" = '30' ] || fail "idle poll did not wait thirty seconds"
 
 check_agent() {
   selected="$1"
@@ -114,9 +125,7 @@ check_agent() {
   expected_stage_prompt="$5"
   shift 5
   clear_case
-  printf '1\n' >"$TASK_COUNTS"
-  printf '%s\n' '[{"annotations":[{"description":"branch=review/test"},{"description":"summary: ready"}]}]' \
-    >"$TASK_EXPORT"
+  printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
 
   set +e
   "$LOOP" --agent "$selected" "$@" >"$TMP/$mode-$selected.out" 2>"$TMP/$mode-$selected.err"
@@ -140,15 +149,15 @@ check_agent() {
     || fail "$selected prompt allowed a synthetic goal"
   grep -Fq "$expected_stage_prompt" "$AGENT_LOG" \
     || fail "$selected $mode prompt omitted its lifecycle boundary"
-  [ "$(<"$TASK_LOG")" = "$expected_query" ] \
+  grep -Fq "$expected_query" "$TASK_LOG" \
     || fail "$selected $mode used the wrong discovery query: $(<"$TASK_LOG")"
-  grep -Fq 'Restarting in 5 seconds...' "$TMP/$mode-$selected.out" \
+  grep -Fq 'Restarting in 30 seconds...' "$TMP/$mode-$selected.out" \
     || fail "$selected exit did not trigger restart polling"
-  [ "$(<"$SLEEP_LOG")" = '5' ] || fail "$selected restart did not wait five seconds"
+  [ "$(<"$SLEEP_LOG")" = '30' ] || fail "$selected restart did not wait thirty seconds"
 }
 
 check_agent codex '--yolo ' loop \
-  'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN export' \
   'Process each existing goal and loop separately'
 grep -Fq 'Only discover and process pending tasks tagged none of +SMALL, +LARGE, or +PLAN' \
   "$AGENT_LOG" || fail "default prompt did not constrain the agent to the standard queue"
@@ -157,11 +166,11 @@ grep -Fq 'Drain the existing pending standard-queue tasks' "$AGENT_LOG" \
 
 # --standard is the explicit spelling of the default, so both must agree.
 check_agent codex '--yolo ' standard \
-  'rc.verbose=nothing status:pending -SMALL -LARGE -PLAN count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN export' \
   'Drain the existing pending standard-queue tasks' --standard
 
 check_agent claude '--dangerously-skip-permissions ' implement \
-  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN export' \
   'Do not review, merge, or complete the task.' --implement-task
 grep -Fq 'dev-implement-task skill' "$AGENT_LOG" \
   || fail "implementation-only mode selected the wrong skill"
@@ -179,7 +188,7 @@ grep -Fq 'review-ready pending +SMALL tasks' "$AGENT_LOG" \
 # The escalated queue: counted exactly as dl-claim.sh --large claims it, and
 # never counted by any other queue.
 check_agent codex '--yolo ' large \
-  'rc.verbose=nothing status:pending +LARGE -PLAN count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending +LARGE -PLAN export' \
   'Drain the existing pending +LARGE escalated tasks' --large
 grep -Fq 'Only discover and process pending tasks tagged +LARGE' "$AGENT_LOG" \
   || fail "--large did not constrain the agent prompt"
@@ -189,16 +198,14 @@ grep -Fq 'remove the +LARGE tag, release the claim, and sync' "$AGENT_LOG" \
   || fail "--large prompt omitted the escalation return path"
 
 check_agent codex '--yolo ' plan \
-  'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN count' \
+  'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN export' \
   'Do not implement, review, or merge any work the plan describes.' --plan
 
 # Every queue binds the claim through the environment the agent inherits, not
 # just through the prompt prose it may ignore.
 route_of() {
   clear_case
-  printf '1\n' >"$TASK_COUNTS"
-  printf '%s\n' '[{"annotations":[{"description":"branch=review/test"},{"description":"summary: ready"}]}]' \
-    >"$TASK_EXPORT"
+  printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
   set +e
   "$LOOP" --agent codex "$@" >/dev/null 2>&1
   set -e
@@ -216,7 +223,6 @@ for expected in standard small large plan; do
 done
 
 clear_case
-printf '0\n' >"$TASK_COUNTS"
 set +e
 "$LOOP" --agent codex --implement-task >"$TMP/implement-idle.out" 2>"$TMP/implement-idle.err"
 implement_idle_rc=$?
@@ -227,7 +233,6 @@ grep -Fq 'No claimable pending standard-queue tasks.' "$TMP/implement-idle.out" 
 [ ! -s "$AGENT_LOG" ] || fail "implementation-only mode launched without claimable work"
 
 clear_case
-printf '[]\n' >"$TASK_EXPORT"
 set +e
 "$LOOP" --agent claude --complete-task >"$TMP/complete-idle.out" 2>"$TMP/complete-idle.err"
 complete_idle_rc=$?
@@ -236,6 +241,81 @@ set -e
 grep -Fq 'No review-ready pending standard-queue tasks.' "$TMP/complete-idle.out" \
   || fail "completion-only mode did not idle without review-ready work"
 [ ! -s "$AGENT_LOG" ] || fail "completion-only mode launched without review-ready work"
+
+# A producer whose reviewer lock is held is not review-ready for anyone: with no
+# default steal window, dlc-claim.sh exits 10 for every worker this loop would
+# launch. Counting it kept the queue permanently non-empty and relaunched a
+# fresh worker, and a fresh box, every thirty seconds.
+clear_case
+printf '%s\n' '[{"annotations":[
+  {"description":"branch=review/test"},
+  {"description":"summary: ready"},
+  {"description":"reviewer=someone@host/worker-1#4242"}
+]}]' >"$TASK_EXPORT"
+set +e
+"$LOOP" --agent claude --complete-task >"$TMP/held.out" 2>"$TMP/held.err"
+held_rc=$?
+set -e
+[ "$held_rc" -eq 143 ] || fail "held-review fixture exited $held_rc"
+[ ! -s "$AGENT_LOG" ] || fail "a worker launched against a task another reviewer holds"
+grep -Fq 'No review-ready pending standard-queue tasks.' "$TMP/held.out" \
+  || fail "a held reviewer claim was still counted as review-ready"
+
+# dlc-release.sh releases by appending an empty reviewer=, and annotations
+# accumulate. The last one is the lock, so a released task is claimable again.
+clear_case
+printf '%s\n' '[{"annotations":[
+  {"description":"branch=review/test"},
+  {"description":"summary: ready"},
+  {"description":"reviewer=someone@host/worker-1#4242"},
+  {"description":"reviewer="}
+]}]' >"$TASK_EXPORT"
+set +e
+"$LOOP" --agent claude --complete-task >"$TMP/released.out" 2>"$TMP/released.err"
+released_rc=$?
+set -e
+[ "$released_rc" -eq 143 ] || fail "released-review fixture exited $released_rc"
+[ -s "$AGENT_LOG" ] || fail "a released reviewer claim was treated as still held"
+
+# An agent that exits without dl-finish.sh abandoned its run: its claim,
+# worktree, and box are still live. The loop must back off rather than launch a
+# replacement into the same queue at the usual interval.
+clear_case
+unset AGENT_FINISH
+export SLEEP_MAX=10
+printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
+set +e
+"$LOOP" --agent claude --complete-task >"$TMP/abandoned.out" 2>"$TMP/abandoned.err"
+abandoned_rc=$?
+set -e
+export AGENT_FINISH=1
+unset SLEEP_MAX
+
+[ "$abandoned_rc" -eq 1 ] \
+  || fail "repeated abandoned runs exited $abandoned_rc instead of 1"
+[ "$(grep -c . "$AGENT_LOG")" -eq 3 ] \
+  || fail "abandoned runs launched $(grep -c . "$AGENT_LOG") agents instead of stopping at 3"
+[ "$(tr '\n' ' ' <"$SLEEP_LOG")" = '60 120 ' ] \
+  || fail "abandoned runs did not back off: $(tr '\n' ' ' <"$SLEEP_LOG")"
+grep -Fq 'ended without dl-finish.sh' "$TMP/abandoned.err" \
+  || fail "an abandoned run was not diagnosed"
+grep -Fq 'still held' "$TMP/abandoned.err" \
+  || fail "the abandoned run's orphaned resources were not reported"
+grep -Fq 'stopping rather than leasing more' "$TMP/abandoned.err" \
+  || fail "the loop did not report why it stopped"
+
+# A run that does reach dl-finish.sh resets the backoff, so one abandoned run in
+# a long drain does not shorten the worker's life.
+clear_case
+printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
+set +e
+"$LOOP" --agent claude --complete-task >"$TMP/finished.out" 2>"$TMP/finished.err"
+finished_rc=$?
+set -e
+[ "$finished_rc" -eq 143 ] || fail "finished-run fixture exited $finished_rc"
+grep -Fq 'loop: run finished (task-completed fixture)' "$TMP/finished.out" \
+  || fail "a completed run was not recognised as finished"
+[ "$(<"$SLEEP_LOG")" = '30' ] || fail "a finished run did not use the normal interval"
 
 [ ! -s "$RESET_LOG" ] \
   || fail "non-interactive runs unexpectedly reset the terminal"

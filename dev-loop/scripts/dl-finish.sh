@@ -17,6 +17,15 @@ case "$event" in
   tasks-created|task-implemented|task-escalated|task-returned|task-completed|goal-completed|worker-idle) ;;
   *) printf 'dev-loop: unknown finish event: %s\n' "$event" >&2; exit 20 ;;
 esac
+# The poll loop cannot tell a finished run from an agent that simply stopped
+# talking: both are just an exited process. Recording the event here is what
+# lets `loop` back off and eventually stop, instead of launching a fresh worker
+# — and a fresh box — every 30 seconds against work already in flight. Absence
+# of the variable is valid; nothing else depends on the marker.
+if [ -n "${DEV_LOOP_FINISH_MARKER:-}" ]; then
+  { printf '%s %s\n' "$event" "$ref" >"$DEV_LOOP_FINISH_MARKER"; } 2>/dev/null || true
+fi
+
 if [ -n "${AGENT_NOTIFY:-}" ]; then
   "$AGENT_NOTIFY" "$event" "$ref" || true
 fi

@@ -155,8 +155,17 @@ limit, an escalation awaited elsewhere, a queue raced empty by other workers,
 and an idle worker that found nothing all terminate through this command; only
 the event differs (`goal-completed`, `worker-idle`). Report first, then run it. Nothing follows it: no summary, no
 verification, no closing message. Reaching the end of your turn without it is an
-incomplete run, not a finished one — the worker process stays alive holding its
-queue, and the poll loop launches nothing until someone kills it by hand.
+incomplete run, not a finished one, and nothing waits for you to come back: your
+process exits, the poll loop sees an eligible queue, and it launches a
+replacement worker that claims its own task and leases its own box while yours
+is still running.
+
+So: **never end your turn while a command is still running.** Box warmups and
+acceptance suites take minutes, and there is no re-invocation when one reports
+back — announcing that you will pick the result up later ends the run then and
+there, abandoning the claim, the worktree, and the box. Wait for the real exit
+status and act on it in the same turn. If you genuinely cannot, release the
+claim and finish as `worker-idle` so the queue is left clean.
 
 The command handles optional `AGENT_NOTIFY` and `AGENT_PID`. Never alter either
 inherited value to bypass notification, PID validation, or worker termination.
