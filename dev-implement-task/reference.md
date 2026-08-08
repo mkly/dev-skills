@@ -63,7 +63,7 @@ no effect until the next warmup.
 | `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
 | `dl-run.sh`         | `<uuid> [--force] [--compact] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--compact` uses in-box RTK with raw fallback; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
-| `dl-release.sh`     | `<uuid> [--stop-box] [--force] [--dry-run]`        | —                 | Abandon claim; park the live lease for reuse (or stop with `--stop-box`), clear `assignee`; task stays pending and its worktree remains. |
+| `dl-release.sh`     | `<uuid> [--blocked-by <task-ref>]... [--stop-box] [--force] [--dry-run]` | —                 | Abandon claim; park the live lease for reuse (or stop with `--stop-box`), clear `assignee`; task stays pending and its worktree remains. `--blocked-by` also records a Taskwarrior dependency so the task leaves `+READY` instead of being handed back to the next worker. |
 | `dl-status.sh`      | `[-h]`                                              | (report)          | Read-only claim/lease/worktree reconciliation. Mutates nothing. |
 
 ## Recipes
@@ -133,6 +133,43 @@ resume the recorded worktree rather than creating one, edit and test it, record
 `escalation-result:`, remove `+LARGE`, release, and sync. Untagged tasks return
 to the standard queue; tasks that retained `+SMALL` return to the small queue.
 No additional resume marker exists.
+
+### Release a task blocked by another task
+
+```sh
+/path/to/dev-implement-task-skill/scripts/dl-release.sh <uuid> --blocked-by <blocker-uuid>
+```
+
+A plain release leaves the task `+READY`, which is correct for an abandoned
+approach but wrong for a real dependency: the queue immediately offers it to the
+next worker, who pays a claim, a box warmup, and a diagnosis turn to reach the
+same conclusion and release it again. Each round costs a full agent turn and
+changes nothing. `--blocked-by` records the dependency Taskwarrior already
+understands, so the task drops out of `+READY` and both `dl-claim.sh` gates
+reject it — auto-pick never lists it, and an explicit claim exits `20` with
+"pending but not ready". When the blocker is completed the dependency clears
+itself and the task returns to the queue with no further action.
+
+Validation happens before any mutation, so a rejected reference never leaves a
+half-released task:
+
+- the reference must resolve to exactly one task in the same project and
+  `repo-id:` as the task being released;
+- the blocker must still be `pending`/`waiting` — a `completed` or `deleted`
+  blocker would clear instantly and hide the reason for the release;
+- a task cannot block itself, and a blocker whose own transitive dependencies
+  reach back to the released task is refused: that cycle would strand both tasks
+  outside `+READY` with no worker able to finish either.
+
+The flag is repeatable and merges with any dependencies the task already
+carries. Each blocker also appends a `blocked-by=<uuid>` annotation, so the next
+claimer sees which task the queue was waiting on and who found it, not just an
+opaque `depends` list.
+
+Workers cannot create tasks, so this flag covers only a blocker that already has
+one. When the blocking work exists nowhere in the queue, post it to the board and
+release normally; filing the task belongs to the controller or
+`dev-create-tasks`.
 
 ### Stale-claim reclaim (never silent)
 
@@ -267,7 +304,11 @@ result; other failures are environment blockers.
 /path/to/dev-implement-task-skill/scripts/dl-status.sh
 ```
 Read-only. Reports active claims (owner, age, `*` = yours, `[STALE]` at
-`DEV_LOOP_STALE`), live leases from `crabbox list -json`, **orphan** leases (a
+`DEV_LOOP_STALE`), **blocked tasks** (pending work with at least one
+uncompleted dependency, and the short UUIDs it is waiting on — this is the
+section that distinguishes "the loop is idle because everything is done" from
+"the loop is idle because everything left is waiting on a blocker"), live
+leases from `crabbox list -json`, **orphan** leases (a
 running lease no pending task references → likely a leak), dangling box refs
 (a task's `box=` no longer resolves), and per-task **worktrees** for this repo:
 each is matched against `git worktree list` filtered to this repo's
@@ -336,6 +377,9 @@ build/test churn.
 | `dl-setup.sh` exits `20` on doctor | Run `crabbox doctor -provider incus` and fix what it reports (Incus not initialized, no remote, etc.). |
 | `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
+| Workers keep claiming the same task and releasing it unworked | The task is blocked by another task and nobody recorded it, so it stays `+READY` every round. Release it with `dl-release.sh <uuid> --blocked-by <blocker-uuid>`; read its `blocked-by=` annotations to see whether an earlier worker already identified the blocker. |
+| `--blocked-by` exits `20` "would create a dependency cycle" | The proposed blocker already depends (directly or transitively) on the task you are releasing. One of the two tasks is scoped wrong — the loop cannot resolve a cycle by waiting. Escalate it rather than forcing the dependency. |
+| A task blocked with `--blocked-by` never becomes claimable | Its blocker is still pending. `task <uuid> export \| jq '.[0].depends'` names it; completing (not releasing) the blocker is what clears the dependency. |
 | `dl-box.sh`/`dl-run.sh`/`dl-merge-back.sh` exits `10` | The task is unclaimed or owned by someone else. Claim it first with `dl-claim.sh`, pick another task, or pass `--force` only for an intentional override. |
 | `dl-box.sh` exits `20` "cannot resolve input:" | The task's latest `input: <branch>` annotation names a branch/ref that does not exist locally yet. Merge back the producer first, fetch/restore the branch, fix the annotation, or pass `--base <ref>` intentionally. |
 | Merge-back exit `20` (no base/worktree, or worktree missing) | The task has no recorded `base`/`worktree=` annotation, or the worktree dir was deleted. Run `/path/to/dev-implement-task-skill/scripts/dl-box.sh <uuid>` first (or to recreate a pruned worktree), then retry. Merge-back is fully local — it never touches the box. |

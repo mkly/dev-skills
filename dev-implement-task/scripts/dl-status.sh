@@ -76,6 +76,36 @@ done
 [ "$any_review" -eq 1 ] || printf '  (none)\n'
 printf '  (* = reviewed by you)\n'
 
+# Blocked tasks: pending work the queue deliberately skips. A dependency makes a
+# task invisible to dl-claim.sh and to loop's claimable poll, which is the point
+# — but it also means an idle loop can mean "waiting on a blocker" rather than
+# "nothing left to do". Naming the blocker here is what separates those two.
+printf '\nBlocked tasks:\n'
+any_blocked=0
+for u in ${pending[@]+"${pending[@]}"}; do
+  [ -n "$u" ] || continue
+  mapfile -t deps < <(dl_task_export "$u" | jq -r '
+    (.[0].depends // [])
+    | if type == "string" then (split(",") | map(select(length > 0))) else . end
+    | .[]' 2>/dev/null)
+  [ "${#deps[@]}" -gt 0 ] || continue
+  declare -a open_deps=()
+  for d in ${deps[@]+"${deps[@]}"}; do
+    [ -n "$d" ] || continue
+    dep_status="$(dl_task_field "$d" '.status // ""')"
+    case "$dep_status" in
+      completed|deleted|"") ;;                     # cleared, or a pruned task
+      *) open_deps+=("${d:0:8}") ;;
+    esac
+  done
+  [ "${#open_deps[@]}" -gt 0 ] || continue
+  any_blocked=1
+  desc="$(dl_task_field "$u" '.description // ""')"
+  printf '    %s  waiting on %-24s  %s\n' \
+    "${u:0:8}" "$(IFS=,; printf '%s' "${open_deps[*]}")" "${desc:0:40}"
+done
+[ "$any_blocked" -eq 1 ] || printf '  (none)\n'
+
 # Live leases from crabbox.
 printf '\nLive leases:\n'
 leases_json="$(crabbox list -provider "$CRABBOX_PROVIDER" -json 2>/dev/null || echo '[]')"

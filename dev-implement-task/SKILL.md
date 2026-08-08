@@ -83,6 +83,26 @@ On abandonment, use `$IMPLEMENT_SKILL/scripts/dl-release.sh`. After an interrupt
 unexplained exit `20`/`30`, read [recovery.md](recovery.md). Invoke `dev-ask`
 only for an environmental or harness failure.
 
+When the reason you cannot proceed is another task — its code has not landed,
+its interface does not exist yet, its review branch is the base you actually
+need — release with the dependency recorded, and say which task blocks you:
+
+```sh
+"$IMPLEMENT_SKILL/scripts/dl-release.sh" "$uuid" --blocked-by "$blocker_uuid"
+```
+
+A plain release puts the task straight back into `+READY`, so the next worker
+claims it, warms a box, rediscovers the same blocker, and releases it again.
+`--blocked-by` takes it out of the queue until its blocker is completed, at
+which point Taskwarrior makes it claimable again on its own. Pass the flag once
+per blocker. Blockers must be pending tasks in this repository; the helper
+refuses a completed blocker, a self-reference, and any cycle that would strand
+both tasks. Finish this run with `task-returned`.
+
+If nothing you can point at as a task blocks you — the work needs something no
+task covers — do not invent one: you cannot create tasks. Post the blocker to
+the board, release, and let the controller file the work.
+
 On any exceptional path, post to the shared board what the annotation cannot
 carry: a blocker another worker will hit too, an approach abandoned and why, or
 the reasoning behind an escalation.
