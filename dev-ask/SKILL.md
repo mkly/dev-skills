@@ -53,3 +53,9 @@ Report and end the turn with:
 
 Preserve completed work. In an autonomous worker, record the same report in its
 durable task/log, leave the task incomplete, and exit nonzero.
+
+Before stopping, search the shared board for this blocker: another worker may
+have already resolved it, which makes the block moot. When it is new, load the
+`dev-board` skill and post the same report there so the next worker finds it
+instead of rediscovering it. `loop` exports `DEV_BOARD_ROOT`. Posting never
+substitutes for stopping — post, then stop.

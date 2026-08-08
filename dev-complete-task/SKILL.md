@@ -67,6 +67,11 @@ UUIDs, and cleanup.
 
 After a partial mutation or unexplained helper failure, read
 [recovery.md](recovery.md). Invoke `dev-ask` only for environmental or harness
-failures. On a standalone final handoff, run
+failures.
+
+On any exceptional path, and when review context a later round needs would
+otherwise die with this worker, load the sibling `dev-board` skill and post it.
+`loop` exports `DEV_BOARD_ROOT`. Search the board before diagnosing a blocker of
+your own. Finding tasks and outcomes stay authoritative in Taskwarrior. On a standalone final handoff, run
 `"$LOOP_SKILL/scripts/dl-finish.sh" task-completed "$uuid"`; do not run it inside
 `dev-loop`.

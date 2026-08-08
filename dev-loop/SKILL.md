@@ -7,7 +7,8 @@ description: Drive a development goal through durable task creation, isolated im
 
 Drive one goal to verified integration in at most five rounds unless the user
 sets another limit. This controller is self-contained: on the normal path, do
-not load sibling `SKILL.md` files or their references. Invoke their scripts
+not load sibling `SKILL.md` files or their references, except `dev-board` on the
+exceptional paths below. Invoke their scripts
 directly and consult `--help` only when an argument is unclear.
 
 Let `LOOP_SKILL` be this skill's absolute directory and resolve
@@ -65,11 +66,14 @@ boundary. Work only pending tasks from its current round and exact identity.
 Resolve `dl-*.sh` below under `IMPLEMENT_SKILL`, `dlc-*.sh` under
 `COMPLETE_SKILL`, and `dct-create.sh` under `CREATE_SKILL`.
 
-The optional agent-messaging path is `$dev-board`. Invoke it directly when
-secondary questions, announcements, or review context should survive across
-workers and `DEV_BOARD_ROOT` names a shared directory. Its Maildir messages are
-context only; keep every task transition and authoritative work contract in
-Taskwarrior. Do not load sibling skill files merely to check for messages.
+`BOARD_SKILL` is the sibling `dev-board` directory, and `loop` exports
+`DEV_BOARD_ROOT`. Load and use it when knowledge would otherwise die with this
+worker: a blocker another queue will hit too, an approach abandoned and why, the
+reasoning behind an escalation, or review context a later round needs. Search it
+before diagnosing a blocker of your own, since another worker may have already
+posted the answer. Its articles are context only; keep every task transition and
+authoritative work contract in Taskwarrior. Do not load it merely to poll for
+messages.
 
 For each claimable UUID:
 

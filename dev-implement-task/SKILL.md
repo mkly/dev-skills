@@ -66,6 +66,13 @@ On abandonment, use `$IMPLEMENT_SKILL/scripts/dl-release.sh`. After an interrupt
 unexplained exit `20`/`30`, read [recovery.md](recovery.md). Invoke `dev-ask`
 only for an environmental or harness failure.
 
+On any exceptional path, load the sibling `dev-board` skill and post what the
+annotation cannot carry: a blocker another worker will hit too, an approach
+abandoned and why, or the reasoning behind an escalation. `loop` exports
+`DEV_BOARD_ROOT`. Search the board first — another worker may have posted this
+blocker's answer already. Annotations stay authoritative for task state; the
+article carries the knowledge across workers.
+
 For a standalone final handoff, run
 `"$LOOP_SKILL/scripts/dl-finish.sh" task-implemented "$uuid"`; use
 `task-escalated`, `task-returned`, or `worker-idle` when applicable. Do not run

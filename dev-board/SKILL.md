@@ -1,6 +1,6 @@
 ---
 name: dev-board
-description: Maintain a shared, searchable project knowledge archive in Maildir form. Use to post durable decisions, questions, findings, and threaded context that any number of development agents can discover with notmuch; never use it for task lifecycle state.
+description: Maintain a shared, searchable project knowledge archive in Maildir form. Use to post durable decisions, questions, findings, and threaded context that any number of development agents can discover with notmuch. Also use when blocked, escalating, or abandoning an approach, to record a blocker, its cause, or the reasoning another worker would otherwise rediscover, and to search for one already posted; never use it for task lifecycle state.
 ---
 
 # Dev Board

@@ -179,6 +179,15 @@ fi
 export DEV_LOOP_ROUTE="$route"
 printf 'loop: worker route %s\n' "$DEV_LOOP_ROUTE"
 
+# The board is how one worker's blocker reaches the next worker: task
+# annotations are per-task and invisible across the queue. An inherited
+# DEV_BOARD_ROOT wins; otherwise default it so the path is never dead.
+if [ -z "${DEV_BOARD_ROOT:-}" ]; then
+  DEV_BOARD_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/dev-board"
+fi
+export DEV_BOARD_ROOT
+printf 'loop: board root %s\n' "$DEV_BOARD_ROOT"
+
 if "$plan_only"; then
   task_filter=(+READY -ACTIVE "${task_filter[@]}")
   task_scope="claimable ${task_scope}"

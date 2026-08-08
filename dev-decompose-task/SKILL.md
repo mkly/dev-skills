@@ -81,3 +81,7 @@ and the dependency shape, stating that no child was claimed. For a standalone
 final handoff, run `"$LOOP_SKILL/scripts/dl-finish.sh" tasks-created "$loop_id"`
 with `LOOP_SKILL` the sibling `dev-loop`. Invoke `dev-ask` only for an
 environmental or harness failure.
+
+On an exceptional path — an unworkable plan, an assumption the plan got wrong,
+or a blocker another queue will hit too — load the sibling `dev-board` skill and
+post it; `loop` exports `DEV_BOARD_ROOT`. Task state stays in Taskwarrior.
