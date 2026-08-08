@@ -5,7 +5,8 @@
 # This skill reviews local implementation branches and acts on the verdict:
 # preserve branches for findings, or merge + safely delete clean branches.
 # Collection and diffing are read-only; only dlc-merge.sh mutates the repo
-# (local merge + safe branch delete + one audit annotation — never a push).
+# (local merge, possibly with a reviewer-resolved conflict, + safe branch
+# delete + one audit annotation — never a push).
 # Mirrors dev-implement-task's conventions so output stays machine-parseable.
 
 # ---------------------------------------------------------------------------
@@ -14,13 +15,15 @@
 #   10 lost-race (review task is unclaimed or claimed by another reviewer)
 #   20 precondition / usage failure (missing tool, not in a repo, dirty
 #      worktree, bad args)
-#   30 missing-artifact (branch/base not present locally) or merge-conflict
+#   30 missing-artifact (branch/base not present locally)
+#   40 merge-conflict (merge left in progress for the reviewer to resolve)
 # ---------------------------------------------------------------------------
 DLC_OK=0
 DLC_LOST=10
 DLC_PRECOND=20
 DLC_MISSING=30
-export DLC_OK DLC_LOST DLC_PRECOND DLC_MISSING
+DLC_CONFLICT=40
+export DLC_OK DLC_LOST DLC_PRECOND DLC_MISSING DLC_CONFLICT
 
 # ---------------------------------------------------------------------------
 # Logging — everything diagnostic goes to stderr so stdout stays parseable.

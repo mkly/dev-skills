@@ -56,10 +56,11 @@ former skill layout.
 | `0` | success, including an empty collection | continue |
 | `10` | review is unclaimed or held by another reviewer agent | stop; release or explicitly steal only a stale review claim |
 | `20` | usage, missing tool, dirty checkout, or failed precondition | correct the precondition; apply `dev-ask` when environmental |
-| `30` | missing branch/base or merge conflict | preserve the branch and treat it as a finding |
+| `30` | missing branch/base | restore or fetch the artifact; do not guess |
+| `40` | merge conflict awaiting resolution | resolve the listed paths, stage them, re-run `dlc-merge.sh --continue` |
 
 Once `dlc-test.sh` starts the requested command, it forwards that command's exit
-code verbatim, including values that happen to equal `20` or `30`.
+code verbatim, including values that happen to equal `20`, `30`, or `40`.
 
 ## Scripts
 
@@ -70,7 +71,7 @@ code verbatim, including values that happen to equal `20` or `30`.
 | `dlc-release.sh` | `<task-ref>` | none | clears current reviewer annotations |
 | `dlc-diff.sh` | `<branch> [--stat-only] [-- <git flags>]` | log/diff | none |
 | `dlc-test.sh` | `<branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>` | command output | temporary worktree/lease only |
-| `dlc-merge.sh` | `<branch> [--dry-run]` | resulting HEAD | local merge, safe branch delete, audit annotation |
+| `dlc-merge.sh` | `<branch> [--dry-run\|--continue\|--abort]` | resulting HEAD | local merge (conflicts left in progress for resolution), safe branch delete, audit annotation |
 | `dlc-done.sh` | `<uuid> --outcome <merged\|stacked\|superseded> [--stop-box] [--keep-worktree] [--force] [--dry-run]` | none | task completion and implementation-resource cleanup |
 
 All diagnostics go to stderr. `dlc-collect.sh` and `dlc-diff.sh` are read-only.
@@ -185,7 +186,31 @@ task rc.confirmation=no sync
 
 The merge helper requires a clean, attached integration checkout. If the branch
 is already an ancestor of HEAD, it skips the merge and safely deletes the
-branch. On conflict it aborts, keeps the branch, and exits `30`.
+branch.
+
+### Resolve a conflicting merge
+
+A conflict does not fail the review. The helper leaves the merge in progress,
+prints the conflicted paths, and exits `40`:
+
+```sh
+scripts/dlc-merge.sh "$branch"            # exit 40, merge in progress
+git diff --name-only --diff-filter=U      # the same conflicted paths
+# resolve each path, preserving both sides' intent
+git add <paths>
+scripts/dlc-merge.sh "$branch" --continue # commits the merge, deletes the branch
+scripts/dlc-done.sh "$uuid" --outcome merged
+```
+
+`--continue` refuses (exit `40`) while any path is still unmerged or a staged
+file still carries `<<<<<<<`/`>>>>>>>` markers. Re-run the acceptance checks with
+`dlc-test.sh` when the resolution changed behavior rather than adjacent lines;
+the branch is gone after `--continue`, so test the integration branch itself.
+
+Reserve `scripts/dlc-merge.sh "$branch" --abort` for conflicts that genuinely
+cannot be reconciled in the integration checkout — the branch needs
+reimplementation against the new base. It backs the merge out, keeps the branch,
+and the producer then goes to Findings with a rebase/reimplement fix task.
 
 ### Finalize a planned stack predecessor
 
@@ -247,7 +272,9 @@ recreate a deleted review branch by guessing its contents.
 | `dlc-diff.sh` cannot resolve the base | Restore/fetch the recorded base or review against a deliberately selected merge base; do not guess silently. |
 | Verification worktree already holds the branch | Reuse/remove it through `dlc-test.sh`; do not delete an unrelated worktree. |
 | Verification box fails to warm twice | Apply `dev-ask`; do not run the acceptance command on the host. |
-| `dlc-merge.sh` exits `30` on conflict | Merge was aborted and the branch preserved. Create a conflict-resolution task rooted on that branch. |
+| `dlc-merge.sh` exits `40` on conflict | The merge is still in progress and the paths are listed. Resolve them, `git add`, and re-run with `--continue`; this is not a review finding. |
+| `dlc-merge.sh` says a merge is already in progress | An earlier conflicted merge was never finished. Resolve and `--continue`, or `--abort` to back it out. |
+| `--continue` reports leftover conflict markers | A staged file still contains `<<<<<<<`/`>>>>>>>`. Finish the resolution in the listed files and stage them again. |
 | `dlc-done.sh` cannot locate `dl-common.sh` | Install skills as siblings or set `DEV_IMPLEMENT_TASK_SKILL_DIR`. |
 | `dlc-done.sh` reports an invalid outcome | Use exactly `merged`, `stacked`, or `superseded`. |
 | `outcome=merged` says the review branch still exists | Run `dlc-merge.sh` first; finalization also verifies the recorded implementation head is integrated. |

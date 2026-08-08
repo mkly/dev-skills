@@ -18,6 +18,8 @@ keep the target repository as the current directory. Use bundled scripts'
   implementation summary, and any stacked end-to-end behavior.
 - Do not implement fixes in the producer worktree.
 - Merge only a clean branch into a clean, attached local integration checkout.
+  Resolving that merge's conflicts there is part of merging, not implementing a
+  fix; anything beyond reconciling the two sides belongs in a follow-up task.
   Never push or force-delete an unmerged branch.
 - Finalize only after a merge, durable successor, or durable finding batch.
 - Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
@@ -58,7 +60,16 @@ already routes the branch to Findings. Record one evidence-backed verdict.
 
 - **Clean:** run `$COMPLETE_SKILL/scripts/dlc-merge.sh "$branch"`, then
   `$COMPLETE_SKILL/scripts/dlc-done.sh "$uuid" --outcome merged`, sync, and verify integration and
-  resource cleanup.
+  resource cleanup. A merge conflict is not a finding and does not fail the
+  review: exit `40` leaves the merge in progress with the conflicted paths
+  listed, so resolve each one in the integration checkout, keeping both sides'
+  intent, `git add` them, then
+  `$COMPLETE_SKILL/scripts/dlc-merge.sh "$branch" --continue` and carry on to
+  `dlc-done.sh --outcome merged`. Re-run the acceptance checks when the
+  resolution changed behavior rather than adjacent lines. Only when the two
+  sides genuinely cannot be reconciled here — the branch needs real
+  reimplementation against the new base — run `dlc-merge.sh "$branch" --abort`
+  and route it to Findings.
 - **Planned stack predecessor:** verify its pending consumer depends on it and
   names its branch as `input:`, then finalize with `--outcome stacked`. Preserve
   the branch until the chain tip lands.

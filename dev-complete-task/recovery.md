@@ -15,8 +15,14 @@ Read this only after a partial mutation or unexplained helper failure.
   explicit stale takeover only after verifying the recorded reviewer is gone.
 - Exit `20` is a usage or precondition failure. Invoke `dev-ask` after two
   environmental failures.
-- Exit `30` means a missing branch/base or merge conflict. Preserve the branch
-  and treat a conflict as a finding.
+- Exit `30` means a missing branch/base. Preserve the branch; never fetch or
+  rebuild it by guessing.
+- Exit `40` means a merge conflict, and the merge is still in progress in the
+  integration checkout. Resolve the listed paths, stage them, and re-run
+  `dlc-merge.sh <branch> --continue`. An integration checkout found mid-merge
+  after an interrupted run is this state: finish it the same way, or back it out
+  with `dlc-merge.sh <branch> --abort` (equivalently `git merge --abort`), which
+  keeps the branch.
 - Never recreate a missing review branch by guessing its contents.
 
 If the diagnostic is still unexplained, consult `reference.md` for the exact

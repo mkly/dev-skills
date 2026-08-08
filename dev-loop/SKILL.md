@@ -105,7 +105,9 @@ For each claimable UUID:
 5. Review the complete increment with `dlc-diff.sh`; run isolated
    `dlc-test.sh` when execution is needed.
 6. Apply exactly one disposition:
-   - clean: `dlc-merge.sh`, then `dlc-done.sh --outcome merged`;
+   - clean: `dlc-merge.sh`, then `dlc-done.sh --outcome merged`; a merge
+     conflict (exit `40`) is resolved in place and finished with
+     `dlc-merge.sh --continue`, not routed to findings;
    - verified stack predecessor: preserve its branch and finalize `stacked`;
    - findings: create accepted next-round tasks with `dct-create.sh
      --from-task`, rooted on the preserved branch, then finalize `superseded`.
