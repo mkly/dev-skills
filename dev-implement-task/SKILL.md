@@ -20,6 +20,7 @@ keep the target repository as the current checkout. Use each bundled script's
   skill; `dl-claim.sh` excludes them from every work queue.
 - Leave a successful task pending and active for `dev-complete-task`.
 - Preserve one stable `DEV_LOOP_OWNER` throughout the task.
+- End every run by calling `dl-finish.sh`; see [Finish](#finish).
 - Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
   never assign, overwrite, or unset them. When present, `AGENT_PID` is the
   inherited numeric Linux PID that `dl-finish.sh` terminates, not an arbitrary
@@ -33,7 +34,10 @@ keep the target repository as the current checkout. Use each bundled script's
    `$IMPLEMENT_SKILL/scripts/dl-claim.sh`. A controller must also pass its goal, loop ID, round,
    and queue flag; a worker launched by `loop` inherits its queue from
    `DEV_LOOP_ROUTE` and must not pass a flag that contradicts it. Exit `10`
-   means the claim was lost; do not work the task.
+   means another worker holds the claim: do not work the task, do not wait for
+   it to be released, and do not pick a different task. You have no work — stop
+   here and go straight to [Finish](#finish) with `worker-idle`. Empty stdout
+   from an auto-pick is the same situation and takes the same path.
 3. Run `$IMPLEMENT_SKILL/scripts/dl-box.sh "$uuid"` and wait for its real exit status. Poll the
    same yielded session through quiet warmup periods.
 4. Edit the recorded worktree. Add new files to Git before box runs because
@@ -73,10 +77,27 @@ abandoned and why, or the reasoning behind an escalation. `loop` exports
 blocker's answer already. Annotations stay authoritative for task state; the
 article carries the knowledge across workers.
 
-For a standalone final handoff, run
-`"$LOOP_SKILL/scripts/dl-finish.sh" task-implemented "$uuid"`; use
-`task-escalated`, `task-returned`, or `worker-idle` when applicable. Do not run
-it as a composed `dev-loop` stage. Preserve inherited `AGENT_PID` and
-`AGENT_NOTIFY` verbatim so this final command can notify the controller and
-terminate the worker as configured; never alter either value to make the
-helper return successfully.
+## Finish
+
+Every run ends with this command, including the short ones: a lost claim race
+(exit `10`), an auto-pick that found nothing, an escalation, an abandoned task.
+A run that ends after two commands still ends here:
+
+```sh
+"$LOOP_SKILL/scripts/dl-finish.sh" task-implemented "$uuid"
+```
+
+Substitute `task-escalated`, `task-returned`, or `worker-idle` for
+`task-implemented` when that is the outcome. The single exception is a composed
+run: skip this only when `dev-loop` loaded this skill as a stage in the current
+session and will finish on your behalf. If you are not certain you are that
+case, you are not that case — run it.
+
+Report first, then run it. Nothing follows it: no summary, no verification, no
+closing message. Reaching the end of your turn without it is an incomplete run,
+not a finished one — the worker process stays alive holding its queue, and the
+poll loop launches nothing until someone kills it by hand.
+
+Preserve inherited `AGENT_PID` and `AGENT_NOTIFY` verbatim so the command can
+notify the controller and terminate the worker; never alter either value to make
+the helper return successfully.

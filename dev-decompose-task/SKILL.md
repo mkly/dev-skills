@@ -19,6 +19,7 @@ directories; keep the target Git repository as the current checkout.
 - Preserve one stable `DEV_LOOP_OWNER` throughout the task. Treat `AGENT_PID`
   and `AGENT_NOTIFY` as controller-owned lifecycle values: inherit them
   verbatim; never assign, overwrite, or unset them.
+- End every run by calling `dl-finish.sh`; see [Finish](#finish).
 - Run `task rc.confirmation=no sync` before claiming and after the complete
   batch. Accept only the helper's explicit unconfigured-sync result.
 
@@ -31,8 +32,10 @@ directories; keep the target Git repository as the current checkout.
    uuid="$("$IMPLEMENT_SKILL/scripts/dl-claim.sh" --plan [--goal "$goal" --loop-id "$loop_id"])"
    ```
 
-   Empty stdout means no claimable plan task; exit `10` means the claim was
-   lost — do not touch the task in either case.
+   Empty stdout means no claimable plan task; exit `10` means another worker
+   holds the claim. Do not touch the task in either case, do not wait for a
+   release, and do not substitute a different task. Either way you have no work
+   — stop here and go straight to [Finish](#finish) with `worker-idle`.
 2. Read the full contract: the task's description and `acceptance:`
    annotations, and the attached plan artifact:
 
@@ -77,11 +80,34 @@ directories; keep the target Git repository as the current checkout.
    completed with its `decomposed-into=` annotations intact.
 
 Report the producer UUID, the created child UUIDs with one-line descriptions,
-and the dependency shape, stating that no child was claimed. For a standalone
-final handoff, run `"$LOOP_SKILL/scripts/dl-finish.sh" tasks-created "$loop_id"`
-with `LOOP_SKILL` the sibling `dev-loop`. Invoke `dev-ask` only for an
-environmental or harness failure.
+and the dependency shape, stating that no child was claimed. Invoke `dev-ask`
+only for an environmental or harness failure.
 
 On an exceptional path — an unworkable plan, an assumption the plan got wrong,
 or a blocker another queue will hit too — load the sibling `dev-board` skill and
 post it; `loop` exports `DEV_BOARD_ROOT`. Task state stays in Taskwarrior.
+
+## Finish
+
+Every run ends with this command, including the short ones: a lost claim race
+(exit `10`), no claimable plan task, an unworkable plan abandoned. A run that
+ends after one command still ends here:
+
+```sh
+"$LOOP_SKILL/scripts/dl-finish.sh" tasks-created "$loop_id"
+```
+
+`LOOP_SKILL` is the sibling `dev-loop` directory. Use `worker-idle` in place of
+`tasks-created` when no claimable plan task existed. The single exception is a
+composed run: skip this only when `dev-loop` loaded this skill as a stage in the
+current session and will finish on your behalf. If you are not certain you are
+that case, you are not that case — run it.
+
+Report first, then run it. Nothing follows it: no summary, no verification, no
+closing message. Reaching the end of your turn without it is an incomplete run,
+not a finished one — the worker process stays alive holding its queue, and the
+poll loop launches nothing until someone kills it by hand.
+
+Preserve inherited `AGENT_PID` and `AGENT_NOTIFY` verbatim so the command can
+notify the controller and terminate the worker; never alter either value to make
+the helper return successfully.

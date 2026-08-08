@@ -173,6 +173,10 @@ else
   agent_scope="Only discover and process pending tasks tagged none of +SMALL, +LARGE, or +PLAN; leave every other task untouched."
 fi
 
+# The routing tags alone. Each stage below counts within this queue using the
+# readiness and ownership predicates that stage's agent actually claims on.
+queue_filter=("${task_filter[@]}")
+
 # The queue is bound to the claim itself, not just described in the prompt:
 # dl-claim.sh reads DEV_LOOP_ROUTE as its default routing flag, so an agent that
 # misreads the prose still cannot claim out of its queue.
@@ -189,15 +193,12 @@ export DEV_BOARD_ROOT
 printf 'loop: board root %s\n' "$DEV_BOARD_ROOT"
 
 if "$plan_only"; then
-  task_filter=(+READY -ACTIVE "${task_filter[@]}")
   task_scope="claimable ${task_scope}"
   prompt="Use the dev-decompose-task skill. Decompose one existing eligible task from the ${task_scope} for this repository into its finer-grained follow-up tasks only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not implement, review, or merge any work the plan describes. Exit if no matching claimable task exists."
 elif "$implement_only"; then
-  task_filter=(+READY -ACTIVE "${task_filter[@]}")
   task_scope="claimable ${task_scope}"
   prompt="Use the dev-implement-task skill. Implement one existing eligible task from the ${task_scope} for this repository through local review-branch creation only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not review, merge, or complete the task. Exit if no matching claimable task exists."
 elif "$complete_only"; then
-  task_filter=(+ACTIVE "${task_filter[@]}")
   task_scope="review-ready ${task_scope}"
   prompt="Use the dev-complete-task skill. Complete one existing implemented task from the ${task_scope} for this repository through review and final disposition only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations, including its branch annotation; do not derive a new goal from this prompt. ${agent_scope} Do not claim or implement unrelated pending work. Exit if no matching review-ready task exists."
 else
@@ -214,16 +215,52 @@ if [ -n "$prompt_suffix" ]; then
   prompt="${prompt} ${prompt_suffix}"
 fi
 
+# numeric_count <label> <value> — echo <value> if it is a count, else complain
+# and echo 0. A non-numeric count would otherwise break the arithmetic below and
+# leave the poll comparing an empty string every 5 seconds.
+numeric_count() {
+  if [[ "$2" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$2"
+  else
+    printf 'loop: could not count %s; treating as none\n' "$1" >&2
+    printf '0\n'
+  fi
+}
+
+# Claimable: what dl-claim.sh auto-pick will actually take — READY, not already
+# started, and unassigned. Dropping the ownership half of that predicate is what
+# lets a task another worker is mid-way through keep the count positive.
+count_claimable() {
+  local n
+  n="$(task rc.verbose=nothing +READY -ACTIVE "${queue_filter[@]}" export \
+    | jq '[ .[] | select((.assignee // "") == "") ] | length' 2>/dev/null)" || n=""
+  numeric_count "claimable ${task_scope}" "$n"
+}
+
+# Review-ready: started work that reached a review branch and a summary, which
+# is what dev-complete-task picks up regardless of which worker implemented it.
+count_completable() {
+  local n
+  n="$(task rc.verbose=nothing +ACTIVE "${queue_filter[@]}" export | jq '
+    [ .[]
+      | select(any(.annotations[]?; .description | startswith("branch=")))
+      | select(any(.annotations[]?; .description | startswith("summary: ")))
+    ] | length
+  ' 2>/dev/null)" || n=""
+  numeric_count "review-ready ${task_scope}" "$n"
+}
+
 eligible_count() {
   if "$complete_only"; then
-    task rc.verbose=nothing "${task_filter[@]}" export | jq '
-      [ .[]
-        | select(any(.annotations[]?; .description | startswith("branch=")))
-        | select(any(.annotations[]?; .description | startswith("summary: ")))
-      ] | length
-    '
+    count_completable
+  elif "$implement_only" || "$plan_only"; then
+    count_claimable
   else
-    task rc.verbose=nothing "${task_filter[@]}" count
+    # The dev-loop agent drains both stages, so either kind of task is work for
+    # it. Counting every pending task instead would include tasks that are live
+    # in another worker's hands: unclaimable, uncompletable, and permanently
+    # positive.
+    printf '%s\n' "$(( $(count_claimable) + $(count_completable) ))"
   fi
 }
 

@@ -16,6 +16,9 @@ derives and validates repository identity. Use `--help` for its argument contrac
 - Keep tasks reconstructable without conversation history or agent attribution.
 - Run `task rc.confirmation=no sync` before inspection and after the complete
   batch. Accept only the helper's explicit unconfigured-sync result.
+- Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
+  inherit them verbatim; never assign, overwrite, or unset them.
+- End every run by calling `dl-finish.sh`; see [Finish](#finish).
 
 ## Design the task set
 
@@ -57,7 +60,25 @@ After final sync, export returned UUIDs and verify pending status, no start or
 assignee, identity, acceptance, routing, dependencies, and ancestry. Report the
 goal/loop identity and created UUIDs, stating that none were claimed.
 
-On a standalone final handoff, run
-`"$LOOP_SKILL/scripts/dl-finish.sh" tasks-created "$loop_id"`. Do not run it as a
-stage inside `dev-loop`. Invoke `dev-ask` only when an environmental or harness
-failure occurs.
+Invoke `dev-ask` only when an environmental or harness failure occurs.
+
+## Finish
+
+Every run ends with this command, including runs that created no task:
+
+```sh
+"$LOOP_SKILL/scripts/dl-finish.sh" tasks-created "$loop_id"
+```
+
+The single exception is a composed run: skip this only when `dev-loop` loaded
+this skill as a stage in the current session and will finish on your behalf. If
+you are not certain you are that case, you are not that case — run it.
+
+Report first, then run it. Nothing follows it: no summary, no verification, no
+closing message. Reaching the end of your turn without it is an incomplete run,
+not a finished one — the worker process stays alive holding its queue, and the
+poll loop launches nothing until someone kills it by hand.
+
+Preserve inherited `AGENT_PID` and `AGENT_NOTIFY` verbatim so the command can
+notify the controller and terminate the worker; never alter either value to make
+the helper return successfully.

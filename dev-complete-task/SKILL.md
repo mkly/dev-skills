@@ -19,6 +19,9 @@ keep the target repository as the current directory. Use bundled scripts'
 - Merge only a clean branch into a clean, attached local integration checkout.
   Never push or force-delete an unmerged branch.
 - Finalize only after a merge, durable successor, or durable finding batch.
+- Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
+  inherit them verbatim; never assign, overwrite, or unset them.
+- End every run by calling `dl-finish.sh`; see [Finish](#finish).
 
 ## Review
 
@@ -31,8 +34,12 @@ branches="$("$COMPLETE_SKILL/scripts/dlc-collect.sh" --from-task "$uuid")"
 "$COMPLETE_SKILL/scripts/dlc-diff.sh" "$branch"
 ```
 
-Exit `10` means another agent is reviewing it; do not inspect, test, merge, or
-finalize that producer. Exit `20` with a queue message means the task belongs to
+Exit `10` means another agent already holds the reviewer lock: do not inspect,
+test, merge, or finalize that producer, do not wait for the lock, and do not
+select a second producer instead. You have no work — stop here and go straight
+to [Finish](#finish) with `worker-idle`. A `DL_LOST` failure later in the run,
+from `dlc-done.sh` reporting a concurrent agent under your owner, ends the same
+way: stop and finish as `worker-idle`. Exit `20` with a queue message means the task belongs to
 another routing queue: the claim defaults to `DEV_LOOP_ROUTE`, so leave that work
 to its own `loop` worker instead of passing a contradicting queue flag. The reviewer lock is independent of the implementation
 assignee and remains held through the terminal verdict. Release it with
@@ -72,6 +79,29 @@ failures.
 On any exceptional path, and when review context a later round needs would
 otherwise die with this worker, load the sibling `dev-board` skill and post it.
 `loop` exports `DEV_BOARD_ROOT`. Search the board before diagnosing a blocker of
-your own. Finding tasks and outcomes stay authoritative in Taskwarrior. On a standalone final handoff, run
-`"$LOOP_SKILL/scripts/dl-finish.sh" task-completed "$uuid"`; do not run it inside
-`dev-loop`.
+your own. Finding tasks and outcomes stay authoritative in Taskwarrior.
+
+## Finish
+
+Every run ends with this command, whatever the verdict was, and including the
+short ones: a lost reviewer lock (exit `10`), no review-ready task, a producer
+left to another queue. A run that ends after two commands still ends here:
+
+```sh
+"$LOOP_SKILL/scripts/dl-finish.sh" task-completed "$uuid"
+```
+
+Use `worker-idle` in place of `task-completed` when no review-ready task
+existed. The single exception is a composed run: skip this only when `dev-loop`
+loaded this skill as a stage in the current session and will finish on your
+behalf. If you are not certain you are that case, you are not that case — run
+it.
+
+Report first, then run it. Nothing follows it: no summary, no verification, no
+closing message. Reaching the end of your turn without it is an incomplete run,
+not a finished one — the worker process stays alive holding its queue, and the
+poll loop launches nothing until someone kills it by hand.
+
+Preserve inherited `AGENT_PID` and `AGENT_NOTIFY` verbatim so the command can
+notify the controller and terminate the worker; never alter either value to make
+the helper return successfully.

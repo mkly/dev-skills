@@ -79,4 +79,35 @@ for selected_agent in claude agy; do
     fail "$selected_agent effort value not forwarded"
 done
 
+# A task another worker holds mid-implementation is neither claimable (it is
+# +ACTIVE and assigned) nor review-ready (no branch=/summary: yet). The default
+# route must not count it, or the poll relaunches an agent that can do nothing
+# with it every 5 seconds.
+mkdir "$TMP/held"
+cat >"$TMP/held/task" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    -ACTIVE) printf '[]\n'; exit 0 ;;
+  esac
+done
+printf '[{"uuid":"11111111-1111-1111-1111-111111111111","status":"pending",'
+printf '"assignee":"someone@host/worker-beef#4242","start":"20260808T000000Z",'
+printf '"annotations":[{"description":"goal: thing"}]}]\n'
+EOF
+cat >"$TMP/held/capture-agent" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$CAPTURE"
+EOF
+chmod +x "$TMP/held/"*
+ln -s capture-agent "$TMP/held/codex"
+
+timeout 1s env CAPTURE="$TMP/held.args" PATH="$TMP/held:$PATH" \
+  "$ROOT/loop" --agent codex >"$TMP/held.out" 2>&1 || true
+
+[ ! -e "$TMP/held.args" ] || \
+  fail 'default route launched an agent for a task held by another worker'
+grep -Fq 'No pending standard-queue tasks' "$TMP/held.out" || \
+  fail 'default route did not report an empty queue for a held task'
+
 printf 'loop-test: ok\n'

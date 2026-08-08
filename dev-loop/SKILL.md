@@ -20,7 +20,8 @@ Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values.
 Workers must inherit them verbatim and must never assign, overwrite, or unset
 them. When present, `AGENT_PID` is a numeric Linux PID used by `dl-finish.sh`
 as the `kill -TERM` target; it is not an arbitrary agent identifier. Absence is
-valid and must remain absence.
+valid and must remain absence. Every run, on every path, ends by calling
+`dl-finish.sh`; see [Finish](#finish).
 
 ## Establish durable state
 
@@ -36,10 +37,10 @@ loop ID and one stable `DEV_LOOP_OWNER` for the entire run. Run
 `$IMPLEMENT_SKILL/scripts/dl-setup.sh` once.
 
 For a request to drain existing work, if no pending task is available, do not
-create tasks or stop at a prose response. Run
-`$LOOP_SKILL/scripts/dl-finish.sh worker-idle` as the final command; it handles
-optional `AGENT_NOTIFY` and `AGENT_PID`. Do not alter either inherited value to
-bypass notification, PID validation, or worker termination.
+create tasks and do not stop at a prose response — "there is nothing to do" is
+still a run that has to end through [Finish](#finish), with the `worker-idle`
+event. Answering in prose and stopping leaves the worker alive holding its
+queue.
 
 For a new goal, decompose it into the smallest coherent task set. Every task
 needs observable acceptance; use dependencies plus `input:` branches for
@@ -81,6 +82,12 @@ For each claimable UUID:
    queue (`--small`, `--large`, or `--plan` when applicable). Never use
    controller-wide unscoped auto-pick. A `+PLAN` task follows the
    `dev-decompose-task` path, not steps 2–6.
+
+   Exit `10` means another worker claimed it first. As the controller you have
+   other work: drop that UUID without touching it, never wait for the claim to
+   be released, and continue to the next claimable UUID. Only when the race
+   leaves nothing claimable does the run end — as `worker-idle` through
+   [Finish](#finish), never as a prose report that the tasks were all taken.
 2. Prepare with `dl-box.sh`; wait for a yielded warmup's real exit status.
 3. Edit only the recorded host worktree. Add new files before box runs. Test
    acceptance through `dl-run.sh --compact`; use raw output when diagnosing.
@@ -118,5 +125,19 @@ checkout demonstrates the original goal acceptance. Use `dl-status.sh` for the
 final resource check.
 
 Report repository/goal identity, rounds, task outcomes, merged branches, checks,
-goal evidence, and integration HEAD. Then run
-`$LOOP_SKILL/scripts/dl-finish.sh goal-completed "$loop_id"` as the final command.
+goal evidence, and integration HEAD. Then end the run:
+
+```sh
+"$LOOP_SKILL/scripts/dl-finish.sh" goal-completed "$loop_id"
+```
+
+Every run ends here, with no exception — a completed goal, an exhausted round
+limit, an escalation awaited elsewhere, a queue raced empty by other workers,
+and an idle worker that found nothing all terminate through this command; only
+the event differs (`goal-completed`, `worker-idle`). Report first, then run it. Nothing follows it: no summary, no
+verification, no closing message. Reaching the end of your turn without it is an
+incomplete run, not a finished one — the worker process stays alive holding its
+queue, and the poll loop launches nothing until someone kills it by hand.
+
+The command handles optional `AGENT_NOTIFY` and `AGENT_PID`. Never alter either
+inherited value to bypass notification, PID validation, or worker termination.
