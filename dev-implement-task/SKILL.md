@@ -18,6 +18,11 @@ keep the target repository as the current checkout. Use each bundled script's
 - Never create tasks, push, merge into integration, or mark the task done.
 - Leave a successful task pending and active for `dev-complete-task`.
 - Preserve one stable `DEV_LOOP_OWNER` throughout the task.
+- Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
+  never assign, overwrite, or unset them. When present, `AGENT_PID` is the
+  inherited numeric Linux PID that `dl-finish.sh` terminates, not an arbitrary
+  agent ID or claim nonce. When absent, leave it absent; `dl-claim.sh` safely
+  generates its own claim nonce.
 
 ## Implement
 
@@ -60,4 +65,7 @@ only for an environmental or harness failure.
 For a standalone final handoff, run
 `"$LOOP_SKILL/scripts/dl-finish.sh" task-implemented "$uuid"`; use
 `task-escalated`, `task-returned`, or `worker-idle` when applicable. Do not run
-it as a composed `dev-loop` stage.
+it as a composed `dev-loop` stage. Preserve inherited `AGENT_PID` and
+`AGENT_NOTIFY` verbatim so this final command can notify the controller and
+terminate the worker as configured; never alter either value to make the
+helper return successfully.

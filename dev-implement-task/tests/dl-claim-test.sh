@@ -240,6 +240,31 @@ small_pick="$(DEV_LOOP_OWNER=small-worker "$CLAIM" \
 [ "$small_pick" = "$escalated" ] \
   || fail "ordinary worker did not pick returned task; got '$small_pick'"
 
+# AGENT_PID is a controller-owned Linux PID, not a free-form claim nonce. Reject
+# fabricated identifiers before they can claim or start a task.
+pid_guard="$(
+  "$CREATE" --goal claim-test \
+    --loop-id 11111111-1111-4111-8111-111111111111 \
+    --description 'reject fabricated agent pid' \
+    --acceptance 'invalid pid cannot mutate the task' \
+    2>"$TMP/pid-guard-create.err"
+)"
+set +e
+DEV_LOOP_OWNER=pid-worker AGENT_PID=agent-label "$CLAIM" "$pid_guard" \
+  >"$TMP/pid-guard.out" 2>"$TMP/pid-guard.err"
+pid_guard_rc=$?
+set -e
+[ "$pid_guard_rc" -eq 20 ] || fail "invalid AGENT_PID exited $pid_guard_rc"
+[ ! -s "$TMP/pid-guard.out" ] || fail "invalid AGENT_PID wrote stdout"
+grep -Fq 'AGENT_PID must be an inherited numeric Linux PID' \
+  "$TMP/pid-guard.err" || fail "invalid AGENT_PID was not diagnosed"
+task rc.context=none rc.json.array=on rc.verbose=nothing "$pid_guard" export \
+  | jq -e '
+      length == 1
+      and ((.[0].assignee // "") == "")
+      and ((.[0].start // "") == "")
+    ' >/dev/null || fail "invalid AGENT_PID mutated the task"
+
 # Two concurrent agents sharing one DEV_LOOP_OWNER must still be told apart by
 # their AGENT_PID nonce, or the second walks into the first's live task.
 shared="$(

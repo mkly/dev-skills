@@ -15,6 +15,12 @@ Let `LOOP_SKILL` be this skill's absolute directory and resolve
 the target Git repository as the current checkout. Never push, overwrite
 unrelated changes, force-delete unmerged branches, or bypass helper checks.
 
+Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values.
+Workers must inherit them verbatim and must never assign, overwrite, or unset
+them. When present, `AGENT_PID` is a numeric Linux PID used by `dl-finish.sh`
+as the `kill -TERM` target; it is not an arbitrary agent identifier. Absence is
+valid and must remain absence.
+
 ## Establish durable state
 
 Normalize the requested outcome to a lowercase goal slug, then run:
@@ -31,7 +37,8 @@ loop ID and one stable `DEV_LOOP_OWNER` for the entire run. Run
 For a request to drain existing work, if no pending task is available, do not
 create tasks or stop at a prose response. Run
 `$LOOP_SKILL/scripts/dl-finish.sh worker-idle` as the final command; it handles
-optional `AGENT_NOTIFY` and `AGENT_PID`.
+optional `AGENT_NOTIFY` and `AGENT_PID`. Do not alter either inherited value to
+bypass notification, PID validation, or worker termination.
 
 For a new goal, decompose it into the smallest coherent task set. Every task
 needs observable acceptance; use dependencies plus `input:` branches for

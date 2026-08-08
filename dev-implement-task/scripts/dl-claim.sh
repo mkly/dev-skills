@@ -80,6 +80,11 @@ fi
 if [ -n "$LOOP_ROUND_FILTER" ] && ! [[ "$LOOP_ROUND_FILTER" =~ ^[1-9][0-9]*$ ]]; then
   dl_die "$DL_PRECOND" "--loop-round must be a positive integer"
 fi
+if [ -n "${AGENT_PID:-}" ] \
+  && { ! [[ "$AGENT_PID" =~ ^[0-9]+$ ]] || [ "$AGENT_PID" -le 1 ]; }; then
+  dl_die "$DL_PRECOND" \
+    "AGENT_PID must be an inherited numeric Linux PID greater than 1; never assign it an agent identifier"
+fi
 
 dl_require task jq flock git
 dl_resolve_repo_identity
@@ -133,11 +138,11 @@ dl_lock() {
     || dl_die "$DL_PRECOND" "could not acquire lock '$name' within ${timeout}s (another claim in progress)"
 }
 
-# Claim nonce identifying the calling agent, not this dl-claim.sh process: it
-# must stay stable across an agent's repeated claims (so re-claim is idempotent)
-# while separating two concurrent agents. `loop` exports AGENT_PID for this.
-# Without it we fall back to a per-call random nonce, which still serves as the
-# claim CAS token but cannot distinguish agents.
+# The controller-owned Linux worker PID doubles as a stable claim nonce across
+# repeated claims and separates concurrent agents sharing one owner. Never
+# synthesize AGENT_PID for this purpose. Without it, use a per-call random
+# nonce; this still serves as the claim CAS token but cannot identify a later
+# call as the same agent.
 AGENT_NONCE="${AGENT_PID:-}"
 
 # claim_one <uuid> — attempt to claim. Echoes uuid on success.
