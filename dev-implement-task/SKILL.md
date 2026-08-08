@@ -43,20 +43,32 @@ keep the target repository as the current checkout. Use each bundled script's
    same yielded session through quiet warmup periods.
 4. Edit the recorded worktree. Add new files to Git before box runs because
    only tracked files sync into Crabbox.
-5. Run focused acceptance checks with:
+5. Run the repository's linters and formatters:
 
    ```sh
    "$IMPLEMENT_SKILL/scripts/dl-run.sh" "$uuid" --compact -- bash -lc '<command>'
    ```
 
-   Use raw mode for exact diagnostics. Run a broader suite once only when the
-   change can affect wider behavior.
+   These always run — they are cheap, and unformatted or lint-dirty code wastes
+   a review cycle. Fix what they report before merging back.
+
+   Tests are the exception, not the routine. Run them only when you have a
+   specific reason and it feels genuinely needed: the change is subtle enough
+   that you cannot tell from reading it whether it works, it touches logic with
+   non-obvious edge cases, a test already exists that directly covers the change,
+   or the task contract asks for test evidence. Otherwise skip them and let the
+   review agents catch what reading missed. Never run a broad suite to feel
+   thorough; when you do test, run only the tests you added and the ones you
+   think your change could affect — name those tests or their file explicitly
+   rather than invoking the whole suite and filtering by eye. Use raw mode for
+   exact diagnostics.
 6. Snapshot with `$IMPLEMENT_SKILL/scripts/dl-merge-back.sh "$uuid"`, annotate a durable
    `summary:` of changes and checks, and sync Taskwarrior.
 7. Re-export and require the original claim, pending/active status, resolving
    `branch=`, `base=`, `commits=`, and `summary:`.
 
-Report the UUID, branch, commit range, checks, and acceptance evidence. Do not
+Report the UUID, branch, commit range, the lint/format commands run, and any
+tests you ran with the reason you ran them. If you ran no tests, say so. Do not
 clean the worktree or box; completion owns cleanup.
 
 ## Exceptional paths

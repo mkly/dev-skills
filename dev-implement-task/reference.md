@@ -203,6 +203,12 @@ files, but Crabbox runs only see tracked files.
 /path/to/dev-implement-task-skill/scripts/dl-run.sh "$uuid" -sync-only --                          # just sync, run nothing
 ```
 
+What to run in the box: lint and formatters on every task, tests only when a
+specific doubt about the change calls for them (see the skill's Implement step),
+and then only the tests you added plus the ones the change could plausibly
+affect — named directly, not the whole suite. Reviewers catch what reading
+missed, so a broad suite run "to be safe" is churn.
+
 `--compact` wraps the in-box command with `rtk test` when `rtk` is on the
 box's `PATH`. If absent, it prints one warning and executes the original argv
 unchanged. Exit codes are forwarded in both cases. Use compact mode for routine
