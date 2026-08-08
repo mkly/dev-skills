@@ -176,6 +176,18 @@ dlc_anno_get() {
   ' 2>/dev/null
 }
 
+# dlc_anno_all <uuid> <key> — every key=value annotation value, one per line.
+# Unlike dlc_anno_get (last match only), this is for keys that accumulate:
+# a task may hand its preserved branch to more than one successor.
+dlc_anno_all() {
+  local uuid="$1" key="$2"
+  dlc_task_export "$uuid" | jq -r --arg k "$key" '
+    (.[0].annotations // []) | map(.description)
+    | map(select(startswith($k + "=")))
+    | map(.[($k|length)+1:]) | .[]
+  ' 2>/dev/null
+}
+
 dlc_anno_set() {
   local uuid="$1" key="$2" value="$3"
   task rc.confirmation=no rc.recurrence.confirmation=no rc.verbose=nothing \

@@ -15,6 +15,7 @@ REPO_ID=""
 GOAL=""
 LOOP_ID=""
 FROM_TASK=""
+FROM_TASK_UUID=""
 DESCRIPTION=""
 INPUT_REF=""
 REVIEW_OF=""
@@ -245,7 +246,8 @@ inherit_task_identity() {
       [(.[]?.annotations // [])[]?.description
        | select(startswith($p + ":"))
        | sub("^" + $p + ":\\s*"; "")] | last // "";
-    {project: (.[0].project // ""), repo_id: note("repo-id"),
+    {uuid: (.[0].uuid // ""), project: (.[0].project // ""),
+     repo_id: note("repo-id"),
      goal: note("goal"), loop_id: note("loop-id"),
      loop_round: note("loop-round")}
   ')" || dct_die "$DCT_PRECOND" "failed to parse identity source task: $FROM_TASK"
@@ -254,6 +256,7 @@ inherit_task_identity() {
     || dct_die "$DCT_PRECOND" "identity source project does not match current origin project '$PROJECT'"
   [ "$(printf '%s' "$identity" | jq -r .repo_id)" = "$REPO_ID" ] \
     || dct_die "$DCT_PRECOND" "identity source repo-id does not match current origin '$REPO_ID'"
+  FROM_TASK_UUID="$(printf '%s' "$identity" | jq -r .uuid)"
   GOAL="$(printf '%s' "$identity" | jq -r .goal)"
   LOOP_ID="$(printf '%s' "$identity" | jq -r .loop_id)"
   producer_round="$(printf '%s' "$identity" | jq -r .loop_round)"
@@ -481,6 +484,20 @@ if ! printf '%s' "$CREATED" | jq -e \
          | (($notes - $actual) | length) == 0)
   ' >/dev/null; then
   dct_die "$DCT_PRECOND" "task $UUID was imported but failed post-create verification"
+fi
+
+# Record the successor back-link on the producer. The child's optional
+# "input: <ref>" note points at the preserved branch, but nothing pointed the
+# other way, so a producer finalized `stacked`/`superseded` left no durable
+# evidence that its branch had been handed to anyone. dlc-done.sh requires
+# this annotation before it will accept either outcome, which is what keeps a
+# preserved branch from outliving every task that could still merge it.
+if [ -n "$FROM_TASK_UUID" ]; then
+  if dct_task "$FROM_TASK_UUID" annotate "successor=$UUID" >/dev/null 2>&1; then
+    dct_log "recorded successor=$UUID on producer ${FROM_TASK_UUID:0:8}"
+  else
+    dct_log "WARNING: could not annotate producer ${FROM_TASK_UUID:0:8} with successor=$UUID; add it by hand before finalizing that task stacked/superseded"
+  fi
 fi
 
 dct_log "created pending, unstarted task $UUID ($REVIEW_BRANCH)"

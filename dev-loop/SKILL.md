@@ -111,6 +111,14 @@ For each claimable UUID:
    - verified stack predecessor: preserve its branch and finalize `stacked`;
    - findings: create accepted next-round tasks with `dct-create.sh
      --from-task`, rooted on the preserved branch, then finalize `superseded`.
+
+   `stacked` and `superseded` keep the review branch alive, so both require a
+   still-pending successor recorded as `successor=` on the producer;
+   `dct-create.sh --from-task` records it, and `dlc-done.sh` refuses the
+   outcome without it. Create the successor before finalizing, never after.
+   A branch preserved with no live successor is orphaned: its producer is
+   closed, `dlc-claim.sh` only claims pending tasks, and nothing in the queue
+   will ever merge it.
 7. Sync and verify terminal producer state and resource cleanup before choosing
    another task.
 

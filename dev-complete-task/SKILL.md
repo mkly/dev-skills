@@ -73,6 +73,17 @@ already routes the branch to Findings. Record one evidence-backed verdict.
 - **Planned stack predecessor:** verify its pending consumer depends on it and
   names its branch as `input:`, then finalize with `--outcome stacked`. Preserve
   the branch until the chain tip lands.
+
+Both `stacked` and `superseded` close the producer while keeping its review
+branch alive, so each one transfers the obligation to merge that branch onto a
+successor. `dlc-done.sh` enforces the transfer: it refuses either outcome
+unless the producer carries a `successor=<uuid>` annotation naming a task that
+is still pending. `dct-create.sh --from-task` writes that annotation, so the
+normal Findings path satisfies it automatically. A closed task can never be
+reclaimed for review — `dlc-claim.sh` requires `status:pending` — so a
+preserved branch whose successors have all closed is stranded permanently
+outside the integration branch. Never reach for `--force` to get past this;
+create or reopen a successor instead.
 - **Findings:** create one independently acceptable fix per finding through
   `$CREATE_SKILL/scripts/dct-create.sh --from-task "$uuid"`. Root the
   first fix on the preserved producer branch and chain overlapping fixes. Sync

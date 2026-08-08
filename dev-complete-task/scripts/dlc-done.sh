@@ -11,6 +11,12 @@
 # first acquire the separate reviewer claim; a task implemented by another owner
 # is annotated as a handoff rather than refused.
 #
+# outcome=merged requires the review branch to be gone and its commits already
+# integrated. outcome=stacked/superseded instead KEEP the branch, so they
+# require a still-pending successor recorded as a successor= annotation
+# (dct-create.sh --from-task writes it): a closed task can never be reclaimed
+# for review, so a preserved branch with no live successor is orphaned work.
+#
 # Exit: 0 ok, 20 precondition.
 set -euo pipefail
 IFS=$'\n\t'
@@ -38,7 +44,8 @@ Usage: dlc-done.sh <uuid> --outcome <merged|stacked|superseded|decomposed>
                    finalization lock
   --stop-box       stop the crabbox lease instead of parking it for reuse
   --keep-worktree  leave the per-task worktree + scratch branch in place
-  --force          bypass the unmerged-worktree guard
+  --force          bypass the unmerged-worktree guard and the stacked/
+                   superseded pending-successor guard (strands the branch)
   --dry-run        log mutations instead of performing them
 
 Exit: 0 ok, 20 precondition.
@@ -133,6 +140,30 @@ case "$OUTCOME" in
     [ -n "$branch" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded review branch to preserve"
     git show-ref --verify --quiet "refs/heads/${branch}" \
       || dl_die "$DL_PRECOND" "review branch '$branch' is missing; refusing outcome=$OUTCOME"
+    # Both outcomes close this task while keeping its branch alive, so the
+    # obligation to merge that branch has to land on someone. Without a live
+    # successor the branch is orphaned the moment this task completes:
+    # dlc-claim.sh requires status:pending, so no reviewer can ever pick the
+    # producer back up, and the work is stranded outside the integration
+    # branch with nothing left in the queue referring to it.
+    if [ "$FORCE" -ne 1 ]; then
+      successors="$(dlc_anno_all "$UUID" successor || true)"
+      [ -n "$successors" ] \
+        || dl_die "$DL_PRECOND" "task $UUID has no successor= annotation; outcome=$OUTCOME keeps review branch '$branch' alive, so create the follow-up with dct-create.sh --from-task $UUID --input $branch (it records the back-link) before finalizing, or pass --force to strand the branch deliberately"
+      live_successor=""
+      while IFS= read -r successor; do
+        [ -n "$successor" ] || continue
+        dl_task_exists "$successor" || continue
+        case "$(dl_task_field "$successor" '.status // ""')" in
+          pending|waiting) live_successor="$successor"; break ;;
+        esac
+      done <<<"$successors"
+      [ -n "$live_successor" ] \
+        || dl_die "$DL_PRECOND" "task $UUID records successor(s) [$(printf '%s' "$successors" | tr '\n' ' ')] but none are still pending; review branch '$branch' would be orphaned. Reopen a successor, or create a new one with dct-create.sh --from-task $UUID --input $branch, before finalizing outcome=$OUTCOME"
+      dl_log "outcome=$OUTCOME: branch '$branch' handed to pending successor ${live_successor:0:8}"
+    else
+      dl_warn "--force: finalizing outcome=$OUTCOME without a pending successor; review branch '$branch' will be orphaned"
+    fi
     ;;
   decomposed)
     [ -n "$(dlc_anno_get "$UUID" decomposed-into)" ] \
