@@ -7,7 +7,8 @@ description: Review and finish one implemented Taskwarrior task by verifying its
 
 Give one review-ready task a terminal verdict: `merged`, `stacked`, or
 `superseded`. Let `COMPLETE_SKILL` be this skill's absolute directory and
-resolve `CREATE_SKILL`, `IMPLEMENT_SKILL`, and `LOOP_SKILL` as its siblings;
+resolve `CREATE_SKILL`, `IMPLEMENT_SKILL`, `LOOP_SKILL`, and `BOARD_SKILL` as
+its siblings;
 keep the target repository as the current directory. Use bundled scripts'
 `--help` for exact flags and exits.
 
@@ -77,9 +78,18 @@ After a partial mutation or unexplained helper failure, read
 failures.
 
 On any exceptional path, and when review context a later round needs would
-otherwise die with this worker, load the sibling `dev-board` skill and post it.
-`loop` exports `DEV_BOARD_ROOT`. Search the board before diagnosing a blocker of
-your own. Finding tasks and outcomes stay authoritative in Taskwarrior.
+otherwise die with this worker, post it to the shared board:
+
+```sh
+"$BOARD_SKILL/scripts/db-search.sh" --task "$uuid" --text '<question in a few words>'
+"$BOARD_SKILL/scripts/db-post.sh" --task "$uuid" --loop "$loop_id" \
+  --subject '<one-line finding>' --body-text "$context"
+```
+
+Search before diagnosing a blocker of your own — another worker may have posted
+the cause. Reply to an existing discussion with `db-post.sh --parent
+<message-id>` rather than starting a second thread on the same subject. Finding
+tasks and outcomes stay authoritative in Taskwarrior.
 
 ## Finish
 

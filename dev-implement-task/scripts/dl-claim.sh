@@ -219,6 +219,7 @@ claim_one() {
     if [ -z "$start" ]; then dl_do dl_task "$uuid" start; fi
     dl_log "re-claimed (already owned by you): $uuid"
     dl_set_task_title "$uuid"
+    dl_board_digest "$uuid"
     printf '%s\n' "$uuid"
     return "$DL_OK"
   fi
@@ -276,6 +277,7 @@ claim_one() {
   dl_anno_event "$uuid" "claimed"
   dl_log "claimed: $uuid"
   dl_set_task_title "$uuid"
+  dl_board_digest "$uuid"
   printf '%s\n' "$uuid"
   return "$DL_OK"
 }

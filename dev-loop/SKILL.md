@@ -6,13 +6,13 @@ description: Drive a development goal through durable task creation, isolated im
 # Dev Loop
 
 Drive one goal to verified integration in at most five rounds unless the user
-sets another limit. This controller is self-contained: on the normal path, do
-not load sibling `SKILL.md` files or their references, except `dev-board` on the
-exceptional paths below. Invoke their scripts
+sets another limit. This controller is self-contained: do not load sibling
+`SKILL.md` files or their references. Invoke their scripts
 directly and consult `--help` only when an argument is unclear.
 
 Let `LOOP_SKILL` be this skill's absolute directory and resolve
-`CREATE_SKILL`, `IMPLEMENT_SKILL`, and `COMPLETE_SKILL` as its siblings. Keep
+`CREATE_SKILL`, `IMPLEMENT_SKILL`, `COMPLETE_SKILL`, and `BOARD_SKILL` as its
+siblings. Keep
 the target Git repository as the current checkout. Never push, overwrite
 unrelated changes, force-delete unmerged branches, or bypass helper checks.
 
@@ -67,13 +67,22 @@ boundary. Work only pending tasks from its current round and exact identity.
 Resolve `dl-*.sh` below under `IMPLEMENT_SKILL`, `dlc-*.sh` under
 `COMPLETE_SKILL`, and `dct-create.sh` under `CREATE_SKILL`.
 
-`BOARD_SKILL` is the sibling `dev-board` directory, and `loop` exports
-`DEV_BOARD_ROOT`. Load and use it when knowledge would otherwise die with this
-worker: a blocker another queue will hit too, an approach abandoned and why, the
-reasoning behind an escalation, or review context a later round needs. Search it
-before diagnosing a blocker of your own, since another worker may have already
-posted the answer. Its articles are context only; keep every task transition and
-authoritative work contract in Taskwarrior. Do not load it merely to poll for
+The shared board is two scripts, not a skill to load:
+
+```sh
+"$BOARD_SKILL/scripts/db-search.sh" --task "$uuid" --text '<question in a few words>'
+"$BOARD_SKILL/scripts/db-post.sh" --task "$uuid" --loop "$loop_id" \
+  --subject '<one-line finding>' --body-text "$report"
+```
+
+Post when knowledge would otherwise die with this worker: a blocker another queue
+will hit too, an approach abandoned and why, the reasoning behind an escalation,
+or review context a later round needs. Search before diagnosing a blocker of your
+own, since another worker may have already posted the answer; `dl-claim.sh` also
+prints any existing discussion of a task to stderr when you claim it. Both
+scripts derive repository identity and repair their own notmuch index, so neither
+needs setup. Articles are context only: keep every task transition and
+authoritative work contract in Taskwarrior, and do not poll the board for
 messages.
 
 For each claimable UUID:

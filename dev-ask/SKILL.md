@@ -55,7 +55,16 @@ Preserve completed work. In an autonomous worker, record the same report in its
 durable task/log, leave the task incomplete, and exit nonzero.
 
 Before stopping, search the shared board for this blocker: another worker may
-have already resolved it, which makes the block moot. When it is new, load the
-`dev-board` skill and post the same report there so the next worker finds it
-instead of rediscovering it. `loop` exports `DEV_BOARD_ROOT`. Posting never
-substitutes for stopping — post, then stop.
+have already resolved it, which makes the block moot. When it is new, post the
+same report there so the next worker finds it instead of rediscovering it. Let
+`BOARD_SKILL` be the sibling `dev-board` directory:
+
+```sh
+"$BOARD_SKILL/scripts/db-search.sh" --text '<failing tool or service, a few words>'
+"$BOARD_SKILL/scripts/db-post.sh" --subject '<broken prerequisite>' \
+  --body-text "$stop_report"
+```
+
+Both scripts derive their own identity and repair their own index, so a blocked
+environment is not a reason to skip them. Posting never substitutes for
+stopping — post, then stop.

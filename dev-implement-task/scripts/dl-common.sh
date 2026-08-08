@@ -181,6 +181,33 @@ dl_set_task_title() {
   xdotool set_window --name "$title" "$window_id" >/dev/null 2>&1 || true
 }
 
+# dl_board_digest <uuid> — print any existing board discussion of this task to
+# stderr, at the one moment a worker is guaranteed to be about to work on it.
+#
+# The board only pays for itself if the reading half is not a judgment call.
+# Every sibling skill asks the agent to "search the board before diagnosing",
+# which is prose an agent reasonably skips when it does not yet know it has a
+# blocker — so the answer another worker already posted arrives too late or not
+# at all. Claiming is the instrumented point: it happens exactly once per task,
+# before any diagnosis, and it already speaks to the agent on stderr.
+#
+# Never fails a claim. A board that is missing, unreadable, misconfigured, or
+# empty produces no output and no error: the task is claimed either way, and a
+# context hint that could abort durable work would be worse than no hint.
+dl_board_digest() {
+  local uuid="$1" search desc out
+  [ -z "${DEV_BOARD_DISABLE:-}" ] || return 0
+  [ -z "$DL_DRY_RUN" ] || return 0
+
+  search="$DL_SCRIPT_DIR/../../dev-board/scripts/db-search.sh"
+  [ -x "$search" ] || return 0
+
+  desc="$(dl_task_field "$uuid" '.description // ""' 2>/dev/null || true)"
+  out="$("$search" --digest --limit 5 --task "$uuid" --text "$desc" 2>/dev/null || true)"
+  [ -z "$out" ] || printf '%s\n' "$out" >&2
+  return 0
+}
+
 # owner_base <assignee> — strip any "#nonce" suffix for display and ownership
 # comparisons. The full assignee value is still used for claim CAS.
 owner_base() { printf '%s' "${1%%#*}"; }

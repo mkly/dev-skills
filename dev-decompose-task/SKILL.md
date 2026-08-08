@@ -6,8 +6,9 @@ description: Claim one +PLAN decomposition task, read its attached plan artifact
 # Dev Decompose Task
 
 Turn one `+PLAN` task into its pending, unclaimed follow-up tasks. Let
-`IMPLEMENT_SKILL`, `CREATE_SKILL`, and `COMPLETE_SKILL` be the sibling
-`dev-implement-task`, `dev-create-tasks`, and `dev-complete-task` skill
+`IMPLEMENT_SKILL`, `CREATE_SKILL`, `COMPLETE_SKILL`, and `BOARD_SKILL` be the
+sibling `dev-implement-task`, `dev-create-tasks`, `dev-complete-task`, and
+`dev-board` skill
 directories; keep the target Git repository as the current checkout.
 
 ## Boundary
@@ -84,8 +85,17 @@ and the dependency shape, stating that no child was claimed. Invoke `dev-ask`
 only for an environmental or harness failure.
 
 On an exceptional path — an unworkable plan, an assumption the plan got wrong,
-or a blocker another queue will hit too — load the sibling `dev-board` skill and
-post it; `loop` exports `DEV_BOARD_ROOT`. Task state stays in Taskwarrior.
+or a blocker another queue will hit too — post it to the shared board, after
+searching it for the same conclusion:
+
+```sh
+"$BOARD_SKILL/scripts/db-search.sh" --task "$uuid" --text '<plan defect in a few words>'
+"$BOARD_SKILL/scripts/db-post.sh" --task "$uuid" --loop "$loop_id" \
+  --subject '<one-line plan defect>' --body-text "$report"
+```
+
+The board is where a plan's wrong assumption reaches the queues it would
+otherwise mislead. Task state stays in Taskwarrior.
 
 ## Finish
 

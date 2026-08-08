@@ -6,7 +6,8 @@ description: Claim and implement one queued Taskwarrior development task in its 
 # Dev Implement Task
 
 Turn one pending UUID into a review-ready local branch. Let `IMPLEMENT_SKILL`
-be this skill's absolute directory and `LOOP_SKILL` its sibling `dev-loop`;
+be this skill's absolute directory and `LOOP_SKILL` and `BOARD_SKILL` its
+siblings `dev-loop` and `dev-board`;
 keep the target repository as the current checkout. Use each bundled script's
 `--help` for flags and exit codes.
 
@@ -70,12 +71,21 @@ On abandonment, use `$IMPLEMENT_SKILL/scripts/dl-release.sh`. After an interrupt
 unexplained exit `20`/`30`, read [recovery.md](recovery.md). Invoke `dev-ask`
 only for an environmental or harness failure.
 
-On any exceptional path, load the sibling `dev-board` skill and post what the
-annotation cannot carry: a blocker another worker will hit too, an approach
-abandoned and why, or the reasoning behind an escalation. `loop` exports
-`DEV_BOARD_ROOT`. Search the board first — another worker may have posted this
-blocker's answer already. Annotations stay authoritative for task state; the
-article carries the knowledge across workers.
+On any exceptional path, post to the shared board what the annotation cannot
+carry: a blocker another worker will hit too, an approach abandoned and why, or
+the reasoning behind an escalation.
+
+```sh
+"$BOARD_SKILL/scripts/db-search.sh" --task "$uuid" --text '<blocker in a few words>'
+"$BOARD_SKILL/scripts/db-post.sh" --task "$uuid" --loop "$loop_id" \
+  --subject '<one-line blocker>' --body-text "$report"
+```
+
+Search before diagnosing, not after: another worker may have posted this
+blocker's answer already, and `dl-claim.sh` prints any existing discussion of the
+task to stderr when you claim it. Both scripts derive their own identity and
+repair their own index, so neither needs setup. Annotations stay authoritative
+for task state; the article carries the knowledge across workers.
 
 ## Finish
 

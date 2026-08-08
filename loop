@@ -217,7 +217,7 @@ fi
 
 # numeric_count <label> <value> — echo <value> if it is a count, else complain
 # and echo 0. A non-numeric count would otherwise break the arithmetic below and
-# leave the poll comparing an empty string every 5 seconds.
+# leave the poll comparing an empty string every 30 seconds.
 numeric_count() {
   if [[ "$2" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "$2"
@@ -301,15 +301,15 @@ while true; do
   pending_count="$(eligible_count)"
 
   if [ "$pending_count" -eq 0 ]; then
-    printf 'No %s. Checking again in 5 seconds...\n' "$task_scope"
-    sleep 5
+    printf 'No %s. Checking again in 30 seconds...\n' "$task_scope"
+    sleep 30
     continue
   fi
 
   run_agent
-  printf 'Restarting in 5 seconds...\n'
+  printf 'Restarting in 30 seconds...\n'
   if [ -t 1 ]; then
     reset
   fi
-  sleep 5
+  sleep 30
 done
