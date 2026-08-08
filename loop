@@ -4,13 +4,15 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: loop --agent <codex|claude|agy> [--small|--no-small]
+Usage: loop --agent <codex|claude|agy> [--small|--no-small|--plan]
             [--implement-task|--complete-task]
             [--model <model>] [--effort <effort>]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 Use --small to consider only pending tasks tagged +SMALL.
 Use --no-small to consider only pending tasks without the +SMALL tag.
+Use --plan to drain +PLAN decomposition tasks via dev-decompose-task;
+every other mode ignores +PLAN tasks.
 Use --implement-task or --complete-task to run only that lifecycle stage.
 Use --model and --effort to override the selected agent's defaults.
 EOF
@@ -19,6 +21,7 @@ EOF
 agent=""
 small_only=false
 no_small=false
+plan_only=false
 implement_only=false
 complete_only=false
 model=""
@@ -41,6 +44,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-small)
       no_small=true
+      shift
+      ;;
+    --plan)
+      plan_only=true
       shift
       ;;
     --implement-task)
@@ -83,8 +90,20 @@ if "$small_only" && "$no_small"; then
   exit 2
 fi
 
+if "$plan_only" && { "$small_only" || "$no_small"; }; then
+  printf 'loop: --plan cannot be combined with --small or --no-small\n' >&2
+  usage >&2
+  exit 2
+fi
+
 if "$implement_only" && "$complete_only"; then
   printf 'loop: --implement-task and --complete-task are mutually exclusive\n' >&2
+  usage >&2
+  exit 2
+fi
+
+if "$plan_only" && { "$implement_only" || "$complete_only"; }; then
+  printf 'loop: --plan is its own lifecycle stage and cannot be combined with --implement-task or --complete-task\n' >&2
   usage >&2
   exit 2
 fi
@@ -116,7 +135,7 @@ fi
 export DEV_LOOP_OWNER
 printf 'loop: worker owner %s\n' "$DEV_LOOP_OWNER"
 
-task_filter=(status:pending)
+task_filter=(status:pending -PLAN)
 task_scope="all pending tasks"
 agent_scope="Process pending tasks regardless of whether they have the +SMALL tag."
 
@@ -128,9 +147,17 @@ elif "$no_small"; then
   task_filter+=(-SMALL)
   task_scope="pending tasks without +SMALL"
   agent_scope="Only discover and process pending tasks that are not tagged +SMALL; leave +SMALL tasks untouched."
+elif "$plan_only"; then
+  task_filter=(status:pending +PLAN)
+  task_scope="pending +PLAN decomposition tasks"
+  agent_scope="Only discover and process pending tasks tagged +PLAN; leave every other task untouched."
 fi
 
-if "$implement_only"; then
+if "$plan_only"; then
+  task_filter=(+READY -ACTIVE "${task_filter[@]}")
+  task_scope="claimable ${task_scope}"
+  prompt="Use the dev-decompose-task skill. Decompose one existing eligible task from the ${task_scope} for this repository into its finer-grained follow-up tasks only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not implement, review, or merge any work the plan describes. Exit if no matching claimable task exists."
+elif "$implement_only"; then
   task_filter=(+READY -ACTIVE "${task_filter[@]}")
   task_scope="claimable ${task_scope}"
   prompt="Use the dev-implement-task skill. Implement one existing eligible task from the ${task_scope} for this repository through local review-branch creation only. Inspect matching pending Taskwarrior tasks first and use the selected task's existing goal and loop-id annotations; do not derive a new goal from this prompt. ${agent_scope} Do not review, merge, or complete the task. Exit if no matching claimable task exists."

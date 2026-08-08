@@ -16,6 +16,8 @@ keep the target repository as the current checkout. Use each bundled script's
   owner's task.
 - Edit only the recorded host worktree. Use the box only for builds and tests.
 - Never create tasks, push, merge into integration, or mark the task done.
+  `+PLAN` decomposition tasks belong to the sibling `dev-decompose-task`
+  skill; `dl-claim.sh` excludes them from every work queue.
 - Leave a successful task pending and active for `dev-complete-task`.
 - Preserve one stable `DEV_LOOP_OWNER` throughout the task.
 - Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:

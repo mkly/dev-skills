@@ -26,7 +26,10 @@ every task an outcome-oriented description and observable `acceptance:`.
 Use both `--depends <producer>` and `--input <producer-branch>` when code
 ancestry matters. Put end-to-end acceptance on the final task in a stack. Use
 `--small` only for narrow, mechanical, fully specified work; never assign
-`+LARGE` during initial creation.
+`+LARGE` during initial creation. Use `--plan` for a decomposition task whose
+deliverable is finer-grained tasks rather than code: attach its plan artifact
+via the implement skill's `dl_plan_put`, and leave it for the sibling
+`dev-decompose-task` skill — work queues never claim `+PLAN` tasks.
 
 For an existing goal, run the sibling controller's read-only state helper:
 

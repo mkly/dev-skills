@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dlc-done.sh — finalize a reviewed task and park its box for reuse.
 #
-#   dlc-done.sh <uuid> --outcome <merged|stacked|superseded>
+#   dlc-done.sh <uuid> --outcome <merged|stacked|superseded|decomposed>
 #               [--stop-box] [--keep-worktree] [--force] [--dry-run]
 #
 # Parks the task's live crabbox lease for the next task (or explicitly stops it),
@@ -28,10 +28,14 @@ IMPL_SKILL_DIR="${DEV_IMPLEMENT_TASK_SKILL_DIR:-$(cd "$SCRIPT_DIR/../../dev-impl
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dlc-done.sh <uuid> --outcome <merged|stacked|superseded>
+Usage: dlc-done.sh <uuid> --outcome <merged|stacked|superseded|decomposed>
                    [--stop-box] [--keep-worktree] [--force] [--dry-run] [-h|--help]
 
-  --outcome        terminal review disposition (required)
+  --outcome        terminal review disposition (required); `decomposed`
+                   finalizes a +PLAN task whose follow-up tasks are recorded
+                   in decomposed-into= annotations — it has no review branch,
+                   so the implementation claim (not a reviewer claim) is the
+                   finalization lock
   --stop-box       stop the crabbox lease instead of parking it for reuse
   --keep-worktree  leave the per-task worktree + scratch branch in place
   --force          bypass the unmerged-worktree guard
@@ -62,9 +66,9 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$UUID" ] || { usage; dl_die "$DL_PRECOND" "task uuid required"; }
 case "$OUTCOME" in
-  merged|stacked|superseded) ;;
+  merged|stacked|superseded|decomposed) ;;
   "") usage; dl_die "$DL_PRECOND" "--outcome is required" ;;
-  *) usage; dl_die "$DL_PRECOND" "invalid --outcome '$OUTCOME' (expected merged, stacked, or superseded)" ;;
+  *) usage; dl_die "$DL_PRECOND" "invalid --outcome '$OUTCOME' (expected merged, stacked, superseded, or decomposed)" ;;
 esac
 
 dl_require task jq crabbox git
@@ -81,14 +85,28 @@ if [ "$status" = "completed" ]; then
   exit "$DL_OK"
 fi
 
-# The implementation assignee and reviewer are independent. Only the exact
-# reviewer agent that claimed this task may give it a terminal disposition.
-dlc_require_reviewer "$UUID"
-
-# The implementation owner is recorded as a handoff below, not treated as a
-# competing claim. dlc_require_reviewer above is the independent review lock.
 assignee="$(dl_task_field "$UUID" '.assignee // ""')"
 implementer="$(owner_base "$assignee")"
+
+if [ "$OUTCOME" = "decomposed" ]; then
+  # Decomposition tasks never enter review (dlc-claim requires a branch and
+  # summary they do not have). The implementation claim taken by
+  # dl-claim.sh --plan is the finalization lock instead: only the exact agent
+  # holding it may finalize.
+  [ -n "$implementer" ] && [ "$implementer" = "$DEV_LOOP_OWNER" ] \
+    || dl_die "$DL_LOST" "task $UUID outcome=decomposed requires the implementation claim; held by '${implementer:-nobody}', you are '$DEV_LOOP_OWNER'"
+  held_nonce="${assignee#*#}"
+  [ "$held_nonce" != "$assignee" ] || held_nonce=""
+  if [ -n "${AGENT_PID:-}" ] && [ -n "$held_nonce" ] && [ "$held_nonce" != "$AGENT_PID" ]; then
+    dl_die "$DL_LOST" "task $UUID is held by a concurrent agent sharing owner '$implementer' (holder nonce $held_nonce, ours $AGENT_PID)"
+  fi
+else
+  # The implementation assignee and reviewer are independent. Only the exact
+  # reviewer agent that claimed this task may give it a terminal disposition.
+  # The implementation owner is recorded as a handoff below, not treated as a
+  # competing claim.
+  dlc_require_reviewer "$UUID"
+fi
 
 branch="$(dl_anno_get "$UUID" branch)"
 base="$(dl_anno_get "$UUID" base)"
@@ -115,6 +133,11 @@ case "$OUTCOME" in
     [ -n "$branch" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded review branch to preserve"
     git show-ref --verify --quiet "refs/heads/${branch}" \
       || dl_die "$DL_PRECOND" "review branch '$branch' is missing; refusing outcome=$OUTCOME"
+    ;;
+  decomposed)
+    [ -n "$(dlc_anno_get "$UUID" decomposed-into)" ] \
+      || dl_die "$DL_PRECOND" "task $UUID has no decomposed-into= annotation; create the follow-up tasks and record their UUIDs first"
+    dl_plan_clear "$UUID"
     ;;
 esac
 
@@ -205,10 +228,13 @@ fi
 dl_anno_event "$UUID" "completed outcome=$OUTCOME${branch:+ (review branch: $branch)}"
 # shellcheck disable=SC1010  # 'done' is the Taskwarrior subcommand, not a loop keyword
 dl_do dl_task "$UUID" done
-dl_do dl_task "$UUID" annotate "review-start="
-dl_do dl_task "$UUID" annotate "reviewer="
+if [ "$OUTCOME" != "decomposed" ]; then
+  dl_do dl_task "$UUID" annotate "review-start="
+  dl_do dl_task "$UUID" annotate "reviewer="
+fi
 case "$OUTCOME" in
   merged) dl_log "done: $UUID — merged review accepted" ;;
   stacked) dl_log "done: $UUID — review branch \"$branch\" preserved for its planned successor" ;;
   superseded) dl_log "done: $UUID — review branch \"$branch\" preserved for follow-up fixes" ;;
+  decomposed) dl_log "done: $UUID — decomposed into the tasks recorded in decomposed-into= annotations" ;;
 esac

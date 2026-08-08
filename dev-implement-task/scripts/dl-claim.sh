@@ -3,7 +3,7 @@
 #
 #   dl-claim.sh                      # auto-pick the highest-urgency READY task
 #   dl-claim.sh <uuid>               # claim a specific task
-#   dl-claim.sh [--small|--large] [--goal <slug>] [--loop-id <uuid>]
+#   dl-claim.sh [--small|--large|--plan] [--goal <slug>] [--loop-id <uuid>]
 #               [--loop-round <n>]
 #               [--steal-after <dur>] [--dry-run]
 #
@@ -29,6 +29,8 @@ Usage: dl-claim.sh [<uuid>] [identity filters] [--steal-after <dur>] [--dry-run]
   <uuid>          claim this specific task (default: auto-pick highest-urgency READY)
   --small         select +SMALL tasks that are not escalated to +LARGE
   --large         select only +LARGE tasks
+  --plan          select only +PLAN decomposition tasks; every other queue
+                  (default, --small, --large) excludes them
   --goal <slug>   require this exact goal annotation
   --loop-id <id>  require this exact controller UUID annotation
   --loop-round <n> require this exact positive round annotation
@@ -47,10 +49,12 @@ LOOP_ID_FILTER=""
 LOOP_ROUND_FILTER=""
 LARGE_WORKER=0
 SMALL_WORKER=0
+PLAN_WORKER=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --small)       SMALL_WORKER=1 ;;
     --large)       LARGE_WORKER=1 ;;
+    --plan)        PLAN_WORKER=1 ;;
     --goal)        shift; [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--goal needs a value"; }
                    GOAL_FILTER="$1" ;;
     --loop-id)     shift; [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--loop-id needs a value"; }
@@ -68,8 +72,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-[ "$SMALL_WORKER" -eq 0 ] || [ "$LARGE_WORKER" -eq 0 ] \
-  || dl_die "$DL_PRECOND" "--small and --large are mutually exclusive"
+[ $((SMALL_WORKER + LARGE_WORKER + PLAN_WORKER)) -le 1 ] \
+  || dl_die "$DL_PRECOND" "--small, --large, and --plan are mutually exclusive"
 
 if [ -n "$GOAL_FILTER" ] && ! [[ "$GOAL_FILTER" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
   dl_die "$DL_PRECOND" "--goal must be a lowercase slug"
@@ -110,12 +114,17 @@ identity_jq='
   and ($loop_round == "" or note("loop-round") == $loop_round)
   and (if $large == "1" then
          ((.tags // []) | index("LARGE")) != null
+         and ((.tags // []) | index("PLAN")) == null
        elif $small == "1" then
          ((.tags // []) | index("SMALL")) != null
          and ((.tags // []) | index("LARGE")) == null
+         and ((.tags // []) | index("PLAN")) == null
+       elif $plan == "1" then
+         ((.tags // []) | index("PLAN")) != null
        else
          ((.tags // []) | index("SMALL")) == null
          and ((.tags // []) | index("LARGE")) == null
+         and ((.tags // []) | index("PLAN")) == null
        end)
 '
 
@@ -125,6 +134,7 @@ task_has_expected_identity() {
     --arg repo_id "$DL_REPO_ID" --arg goal "$GOAL_FILTER" \
     --arg loop_id "$LOOP_ID_FILTER" --arg loop_round "$LOOP_ROUND_FILTER" \
     --arg large "$LARGE_WORKER" --arg small "$SMALL_WORKER" \
+    --arg plan "$PLAN_WORKER" \
     ".[0] | ${identity_jq}" >/dev/null 2>&1
 }
 
@@ -267,7 +277,7 @@ mapfile -t candidates < <(
     | jq -r --arg project "$DL_REPO_PROJECT" --arg repo_id "$DL_REPO_ID" \
       --arg goal "$GOAL_FILTER" --arg loop_id "$LOOP_ID_FILTER" \
       --arg loop_round "$LOOP_ROUND_FILTER" --arg large "$LARGE_WORKER" \
-      --arg small "$SMALL_WORKER" "
+      --arg small "$SMALL_WORKER" --arg plan "$PLAN_WORKER" "
              [ .[] | select((.assignee // \"\") == \"\")
                | select(${identity_jq}) ]
              | sort_by(.urgency // 0) | reverse | .[].uuid" 2>/dev/null
@@ -288,7 +298,7 @@ if [ -n "$STEAL_SECS" ]; then
       | jq -r --arg project "$DL_REPO_PROJECT" --arg repo_id "$DL_REPO_ID" \
         --arg goal "$GOAL_FILTER" --arg loop_id "$LOOP_ID_FILTER" \
         --arg loop_round "$LOOP_ROUND_FILTER" --arg large "$LARGE_WORKER" \
-        --arg small "$SMALL_WORKER" \
+        --arg small "$SMALL_WORKER" --arg plan "$PLAN_WORKER" \
         "[.[] | select(${identity_jq})]
          | sort_by(.urgency // 0) | reverse | .[].uuid" 2>/dev/null
   )

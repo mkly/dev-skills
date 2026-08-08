@@ -48,6 +48,16 @@ mechanical work. Create through
 loop ID, and round, then perform the required batch-final Taskwarrior sync.
 On resume, use returned durable tasks rather than decomposing again.
 
+A goal too large to decompose in one sitting may instead be captured as
+`+PLAN` decomposition tasks: create each with `dct-create.sh --plan` and
+attach its plan artifact through the implement skill's `dl_plan_put`. A
+`+PLAN` task is never implemented directly, and the default, `--small`, and
+`--large` queues never claim one. Route it to the sibling `dev-decompose-task`
+skill, which claims via `dl-claim.sh --plan`, creates the plan's follow-up
+tasks with `dct-create.sh --from-task`, records them as `decomposed-into=`
+annotations, and finalizes the producer with `dlc-done.sh --outcome
+decomposed`. Drain the plan queue before the work queues it feeds.
+
 ## Run a round
 
 Refresh `$LOOP_SKILL/scripts/dl-loop-state.sh --goal "$goal" --loop-id "$loop_id"` at every durable
@@ -64,8 +74,9 @@ Taskwarrior. Do not load sibling skill files merely to check for messages.
 For each claimable UUID:
 
 1. Claim it explicitly with `dl-claim.sh`, binding goal, loop ID, round, and
-   queue (`--small` or `--large` when applicable). Never use controller-wide
-   unscoped auto-pick.
+   queue (`--small`, `--large`, or `--plan` when applicable). Never use
+   controller-wide unscoped auto-pick. A `+PLAN` task follows the
+   `dev-decompose-task` path, not steps 2–6.
 2. Prepare with `dl-box.sh`; wait for a yielded warmup's real exit status.
 3. Edit only the recorded host worktree. Add new files before box runs. Test
    acceptance through `dl-run.sh --compact`; use raw output when diagnosing.

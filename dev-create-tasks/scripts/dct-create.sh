@@ -22,6 +22,7 @@ LOOP_ROUND=""
 DRY_RUN=0
 JSON_OUTPUT=0
 SMALL_TASK=0
+PLAN_TASK=0
 declare -a ACCEPTANCE=()
 declare -a DEPENDENCIES=()
 declare -a EXTRA_ANNOTATIONS=()
@@ -50,6 +51,9 @@ Options:
                             is the producer's round plus one)
   --annotation <text>       add another annotation; repeatable
   --small                   tag this trivial task +SMALL
+  --plan                    tag this decomposition task +PLAN; it carries a
+                            plan artifact and is claimable only via
+                            dl-claim.sh --plan, never as ordinary work
   --json                    emit task and derived repository/loop identity
   --dry-run                 validate and preview without importing
   -h, --help                show this help
@@ -97,6 +101,7 @@ while [ "$#" -gt 0 ]; do
     --annotation)
       shift; require_value --annotation "$#"; EXTRA_ANNOTATIONS+=("$1") ;;
     --small) SMALL_TASK=1 ;;
+    --plan) PLAN_TASK=1 ;;
     --json) JSON_OUTPUT=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit "$DCT_OK" ;;
@@ -106,6 +111,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+[ "$SMALL_TASK" -eq 0 ] || [ "$PLAN_TASK" -eq 0 ] \
+  || dct_die "$DCT_PRECOND" "--small and --plan are mutually exclusive"
 [ -n "$DESCRIPTION" ] || { usage; dct_die "$DCT_PRECOND" "--description is required"; }
 [ "${#ACCEPTANCE[@]}" -gt 0 ] || { usage; dct_die "$DCT_PRECOND" "at least one --acceptance is required"; }
 [[ "$DESCRIPTION" =~ [^[:space:]] ]] \
@@ -370,7 +377,8 @@ PAYLOAD="$(jq -cn \
   --arg project "$PROJECT" \
   --argjson depends "$DEPENDENCIES_JSON" \
   --argjson notes "$NOTES_JSON" \
-  --argjson small "$SMALL_TASK" '
+  --argjson small "$SMALL_TASK" \
+  --argjson plan "$PLAN_TASK" '
     {
       uuid: $uuid,
       status: "pending",
@@ -380,7 +388,9 @@ PAYLOAD="$(jq -cn \
       annotations: ($notes | map({entry: $entry, description: .}))
     }
     + if ($depends | length) > 0 then {depends: $depends} else {} end
-    + if $small == 1 then {tags: ["SMALL"]} else {} end
+    + if $small == 1 then {tags: ["SMALL"]}
+      elif $plan == 1 then {tags: ["PLAN"]}
+      else {} end
   ')" || dct_die "$DCT_PRECOND" "failed to construct task JSON"
 
 task_slug() {
@@ -416,11 +426,14 @@ emit_result() {
       --arg loop_round "$LOOP_ROUND" \
       --arg description "$DESCRIPTION" \
       --argjson small "$SMALL_TASK" \
+      --argjson plan "$PLAN_TASK" \
       --argjson created "$created" \
       '{uuid: $uuid, review_branch: $review_branch, project: $project,
         repo_id: $repo_id, goal: $goal, loop_id: $loop_id,
         loop_round: ($loop_round | tonumber), description: $description,
-        tags: (if $small == 1 then ["SMALL"] else [] end),
+        tags: (if $small == 1 then ["SMALL"]
+               elif $plan == 1 then ["PLAN"]
+               else [] end),
         created: $created}'
   else
     printf '%s\n' "$UUID"
@@ -450,6 +463,7 @@ if ! printf '%s' "$CREATED" | jq -e \
   --arg description "$DESCRIPTION" \
   --argjson depends "$DEPENDENCIES_JSON" \
   --argjson small "$SMALL_TASK" \
+  --argjson plan "$PLAN_TASK" \
   --argjson notes "$NOTES_JSON" '
     length == 1
     and .[0].uuid == $uuid
@@ -460,7 +474,9 @@ if ! printf '%s' "$CREATED" | jq -e \
     and ((.[0].assignee // "") == "")
     and (((.[0].depends // []) | sort) == ($depends | sort))
     and (((.[0].tags // []) | sort) ==
-         (if $small == 1 then ["SMALL"] else [] end))
+         (if $small == 1 then ["SMALL"]
+          elif $plan == 1 then ["PLAN"]
+          else [] end))
     and ([.[0].annotations[]?.description] as $actual
          | (($notes - $actual) | length) == 0)
   ' >/dev/null; then
