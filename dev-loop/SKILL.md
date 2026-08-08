@@ -48,6 +48,12 @@ boundary. Work only pending tasks from its current round and exact identity.
 Resolve `dl-*.sh` below under `IMPLEMENT_SKILL`, `dlc-*.sh` under
 `COMPLETE_SKILL`, and `dct-create.sh` under `CREATE_SKILL`.
 
+The optional agent-messaging path is `$dev-board`. Invoke it directly when
+secondary questions, announcements, or review context should survive across
+workers and `DEV_BOARD_ROOT` names a shared directory. Its Maildir messages are
+context only; keep every task transition and authoritative work contract in
+Taskwarrior. Do not load sibling skill files merely to check for messages.
+
 For each claimable UUID:
 
 1. Claim it explicitly with `dl-claim.sh`, binding goal, loop ID, round, and

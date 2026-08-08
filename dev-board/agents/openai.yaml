@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Board"
+  short_description: "Search a shared project knowledge archive"
+  default_prompt: "Use $dev-board to post or search durable project knowledge in a shared notmuch archive."
