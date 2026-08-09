@@ -111,9 +111,8 @@ if box_alive "$slug"; then
   handle="$slug"
   dlc_log "reusing live box for ${BRANCH}: $handle"
 else
-  mapfile -t incus_flags < <(dlc_crabbox_incus_flags)
   if [ "$DRY" -eq 1 ]; then
-    dlc_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER ${incus_flags[*]:-} -slug $slug -ttl $DLC_TEST_TTL"
+    dlc_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER -slug $slug -ttl $DLC_TEST_TTL"
     handle="$slug"
   else
     warmout="$(mktemp "${TMPDIR:-/tmp}/dlc-warm.XXXXXX")"
@@ -122,7 +121,6 @@ else
     # Warm from the test worktree so crabbox's repoRoot matches where `crabbox
     # run` below will cd, matching dev-implement-task's dl-box.sh model.
     if ! ( cd "$wt" && crabbox warmup -provider "$CRABBOX_PROVIDER" \
-          ${incus_flags[@]+"${incus_flags[@]}"} \
           -slug "$slug" -ttl "$DLC_TEST_TTL" ) >"$warmout" 2>&1; then
       cat "$warmout" >&2
       dlc_die "$DLC_PRECOND" "crabbox warmup failed (see output above)"

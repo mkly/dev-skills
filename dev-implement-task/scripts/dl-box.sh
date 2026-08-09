@@ -208,12 +208,13 @@ if [ -z "$DL_DRY_RUN" ]; then
   fi
 fi
 
-# 4. Warm a new lease if adoption did not produce one.
-mapfile -t incus_flags < <(dl_crabbox_incus_flags)
+# 4. Warm a new lease if adoption did not produce one. Incus overrides (image,
+# remote, profile, ...) come from CRABBOX_INCUS_* env vars, which crabbox reads
+# on every subcommand.
 if [ -n "$handle" ]; then
   :
 elif [ -n "$DL_DRY_RUN" ]; then
-  dl_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER ${incus_flags[*]:-} -slug $slug -ttl $DEV_LOOP_TTL"
+  dl_log "DRY-RUN: crabbox warmup -provider $CRABBOX_PROVIDER -slug $slug -ttl $DEV_LOOP_TTL"
   handle="$slug"
 else
   warmout="$(mktemp "${TMPDIR:-/tmp}/dl-warm.XXXXXX")"
@@ -224,7 +225,6 @@ else
   # the main checkout instead, repoRoot would mismatch and every run would demand
   # `-reclaim`. Warming from the worktree keeps the two in agreement.
   if ! ( cd "$wt" && crabbox warmup -provider "$CRABBOX_PROVIDER" \
-        ${incus_flags[@]+"${incus_flags[@]}"} \
         -slug "$slug" -ttl "$DEV_LOOP_TTL" ) >"$warmout" 2>&1; then
     cat "$warmout" >&2
     dl_die "$DL_PRECOND" "crabbox warmup failed (see output above)"

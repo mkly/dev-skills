@@ -38,9 +38,7 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `CRABBOX_PROVIDER`    | `incus`                                   | Crabbox provider. Passed to **every** crabbox call (bare `crabbox list` defaults elsewhere and fails). |
 | `DEV_LOOP_TTL`        | `2h`                                      | Lease TTL passed to `crabbox warmup -ttl`. |
 | `DEV_LOOP_STALE`      | `4h`                                      | Age past which `dl-status.sh` flags an active claim `[STALE]`. (Stealing still requires an explicit `--steal-after`.) |
-| `INCUS_IMAGE`         | (unset → crabbox default)                 | Optional `-incus-image` override; applied only at warmup. |
-| `INCUS_TYPE`          | (unset → `container`)                     | Optional `-incus-instance-type` (`container`\|`vm`); warmup only. |
-| `INCUS_REMOTE`        | (unset → local)                           | Optional `-incus-remote`; warmup only. |
+| `CRABBOX_INCUS_*`     | (unset → crabbox defaults)                | Incus overrides read by crabbox itself on **every** subcommand: `CRABBOX_INCUS_IMAGE`, `CRABBOX_INCUS_REMOTE`, `CRABBOX_INCUS_INSTANCE_TYPE`, `CRABBOX_INCUS_PROFILE`, ... `CRABBOX_INCUS_REMOTE` also namespaces the parked-box slot so local and remote pools never collide. |
 | `DEV_LOOP_STATE_DIR`  | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop` | Holds the `flock` lockfiles (`locks/`). |
 | `DEV_LOOP_WORKTREE_DIR` | `${DEV_LOOP_STATE_DIR}/worktrees`        | Parent dir for per-task git worktrees. Each task gets `<dir>/<repo-key>/<slug>` (a worktree on scratch branch `dl/<slug>`). Kept OUTSIDE the repo so worktrees never appear as untracked files. The `<repo-key>` is derived from `git rev-parse --git-common-dir`, so it is stable across a repo's own worktrees. |
 | `DEV_LOOP_TITLE`      | `auto`                                     | On a successful claim, update the worker's X11 window title to `[short-uuid] first five description words`. Set to `off`, `0`, `false`, or `no` to disable. |

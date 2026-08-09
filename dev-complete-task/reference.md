@@ -90,9 +90,7 @@ producer task's implementation lease:
 | `DLC_TEST_TTL` | `30m` | verification lease TTL |
 | `DLC_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-complete-task` | completion test state |
 | `DLC_WORKTREE_DIR` | `${DLC_STATE_DIR}/worktrees` | branch verification worktrees |
-| `INCUS_IMAGE` | unset | optional warmup image |
-| `INCUS_TYPE` | unset | optional `container` or `vm` |
-| `INCUS_REMOTE` | unset | optional Incus remote |
+| `CRABBOX_INCUS_*` | unset | Incus overrides read by crabbox itself on every subcommand (`CRABBOX_INCUS_IMAGE`, `CRABBOX_INCUS_REMOTE`, `CRABBOX_INCUS_INSTANCE_TYPE`, ...) |
 | `DEV_IMPLEMENT_TASK_SKILL_DIR` | sibling `../dev-implement-task` | installed implementation skill used by `dlc-done.sh` |
 | `DEV_LOOP_ROUTE` | unset (→ the untagged standard queue) | routing queue (`standard`, `small`, `large`, `plan`) exported by `loop`. `dlc-claim.sh` applies the same predicate as `dl-claim.sh`, so the queue that implemented a task is the queue that reviews it; an explicit `--standard`/`--small`/`--large`/`--plan` overrides it, and any other value is a precondition error (`20`). |
 

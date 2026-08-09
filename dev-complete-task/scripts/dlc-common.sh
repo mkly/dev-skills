@@ -295,26 +295,14 @@ dlc_task_for_branch() {
 # ---------------------------------------------------------------------------
 # Crabbox/Incus knobs for dlc-test.sh. Verification uses a branch-keyed lease so
 # it cannot disturb the implementation task's owned box or worktree. It never
-# writes Taskwarrior state. Names match dev-implement-task's provider vars so
-# one config works for both skills.
+# writes Taskwarrior state. Incus overrides (image, remote, profile, ...) come
+# from crabbox's own CRABBOX_INCUS_* env vars, which apply to every subcommand.
 # ---------------------------------------------------------------------------
 : "${CRABBOX_PROVIDER:=incus}"
 : "${DLC_TEST_TTL:=30m}"        # short-lived: one review check, not a work session
-: "${INCUS_IMAGE:=}"            # optional -incus-image override
-: "${INCUS_TYPE:=}"             # optional -incus-instance-type (container|vm)
-: "${INCUS_REMOTE:=}"           # optional -incus-remote
 : "${DLC_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-complete-task}"
 : "${DLC_WORKTREE_DIR:=${DLC_STATE_DIR}/worktrees}"  # per-branch checkouts (outside the repo tree)
-export CRABBOX_PROVIDER DLC_TEST_TTL INCUS_IMAGE INCUS_TYPE INCUS_REMOTE DLC_STATE_DIR DLC_WORKTREE_DIR
-
-# dlc_crabbox_incus_flags — Incus overrides as extra `crabbox` args, only when set.
-dlc_crabbox_incus_flags() {
-  local -a f=()
-  [ -n "$INCUS_IMAGE" ]  && f+=(-incus-image "$INCUS_IMAGE")
-  [ -n "$INCUS_TYPE" ]   && f+=(-incus-instance-type "$INCUS_TYPE")
-  [ -n "$INCUS_REMOTE" ] && f+=(-incus-remote "$INCUS_REMOTE")
-  if [ "${#f[@]}" -gt 0 ]; then printf '%s\n' "${f[@]}"; fi
-}
+export CRABBOX_PROVIDER DLC_TEST_TTL DLC_STATE_DIR DLC_WORKTREE_DIR
 
 # dlc_repo_key — stable short id for THIS repo (namespaces DLC_WORKTREE_DIR so
 # two checkouts on one machine never collide). Same derivation as implementation.

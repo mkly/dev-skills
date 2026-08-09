@@ -30,9 +30,6 @@ dl_die()  { local code="$1"; shift; dl_err "$*"; exit "$code"; }
 : "${CRABBOX_PROVIDER:=incus}"
 : "${DEV_LOOP_TTL:=2h}"          # crabbox lease ttl
 : "${DEV_LOOP_STALE:=4h}"        # default age past which an active claim is "stale"
-: "${INCUS_IMAGE:=}"             # optional -incus-image override
-: "${INCUS_TYPE:=}"              # optional -incus-instance-type (container|vm)
-: "${INCUS_REMOTE:=}"            # optional -incus-remote
 : "${DEV_LOOP_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop}"
 : "${DEV_LOOP_WORKTREE_DIR:=${DEV_LOOP_STATE_DIR}/worktrees}"  # per-task git worktrees (outside the repo tree)
 : "${DEV_LOOP_TITLE:=auto}"       # auto updates the X11 window title; off disables it
@@ -364,21 +361,6 @@ dl_slug() {
 }
 
 # ---------------------------------------------------------------------------
-# Crabbox wrapper — applies provider + incus overrides consistently.
-# Usage: dl_crabbox <subcommand> [args...]
-# Incus overrides are appended only when set, so they never clobber defaults.
-# ---------------------------------------------------------------------------
-dl_crabbox_incus_flags() {
-  local -a f=()
-  [ -n "$INCUS_IMAGE" ]  && f+=(-incus-image "$INCUS_IMAGE")
-  [ -n "$INCUS_TYPE" ]   && f+=(-incus-instance-type "$INCUS_TYPE")
-  [ -n "$INCUS_REMOTE" ] && f+=(-incus-remote "$INCUS_REMOTE")
-  # Print nothing (not a blank line) when no overrides are set, so callers can
-  # safely `mapfile` the result without picking up an empty argument.
-  if [ "${#f[@]}" -gt 0 ]; then printf '%s\n' "${f[@]}"; fi
-}
-
-# ---------------------------------------------------------------------------
 # Idle-box parking — dev-complete-task's dlc-done.sh parks a live lease instead
 # of stopping it, and the next dl-box.sh in the same repo adopts it (reclaim + sync)
 # instead of paying a fresh warmup. State is one file per repo holding the
@@ -428,7 +410,7 @@ dl_box_holder() {
 # dl_idle_box_file — path of this repo's parked-box state file, namespaced by
 # Incus remote so a local pool and a remote pool never share the slot.
 dl_idle_box_file() {
-  local r="${INCUS_REMOTE:-${CRABBOX_INCUS_REMOTE:-}}"
+  local r="${CRABBOX_INCUS_REMOTE:-}"
   printf '%s/idle-box-%s%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)" "${r:+-$r}"
 }
 
