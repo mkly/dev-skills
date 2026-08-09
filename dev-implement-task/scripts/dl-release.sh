@@ -216,7 +216,7 @@ fi
 
 # Stop the task and clear the assignee so the slot frees up.
 dl_do dl_task "$UUID" stop || true
-dl_do dl_task "$UUID" modify assignee:
+dl_do dl_task_modify "$UUID" assignee:
 dl_anno_event "$UUID" "released claim"
 dl_log "released: $UUID"
 

@@ -147,6 +147,45 @@ dl_task_field() {
   dl_task_export "$uuid" | jq -r ".[0] | ${expr}" 2>/dev/null
 }
 
+# dl_task_modify <uuid> <arg...> — `task modify` that cannot silently eat the
+# task description.
+#
+# Taskwarrior converts an argument it does not recognize as an attribute into
+# description text and exits 0. `modify assignee:` on a taskrc where the
+# assignee UDA is undefined does not clear the UDA — it replaces the task title
+# with the literal string "assignee:", with no error. dl-setup.sh normally
+# defines the UDAs, so this only bites when setup was skipped, when TASKRC
+# points somewhere unexpected, or when a caller passes an attribute this repo
+# never registered. The failure is silent and the title is unrecoverable from
+# Taskwarrior alone, so verify instead of trusting the exit code.
+#
+# Callers that intend to rewrite the title pass description:… explicitly; that
+# case is allowed through unchecked.
+dl_task_modify() {
+  local uuid="$1"; shift
+  local before after arg intends_description=
+
+  for arg in "$@"; do
+    case "$arg" in
+      description:*|desc:*) intends_description=1 ;;
+    esac
+  done
+
+  before="$(dl_task_field "$uuid" '.description // ""')"
+  dl_task "$uuid" modify "$@" || return "$?"
+  if [ -n "$intends_description" ]; then
+    return 0
+  fi
+
+  after="$(dl_task_field "$uuid" '.description // ""')"
+  if [ "$after" != "$before" ]; then
+    dl_task "$uuid" modify description:"$before" >/dev/null 2>&1 || true
+    dl_die "$DL_PRECOND" \
+      "refusing a modify that overwrote the task description: $* (title restored to: $before)"
+  fi
+  return 0
+}
+
 # dl_task_exists <uuid> — true if exactly one task matches.
 dl_task_exists() {
   local uuid="$1" n
@@ -270,7 +309,7 @@ dl_plan_put() {
     dl_die "$DL_PRECOND" "plan file exceeds ${DL_PLAN_MAX_BYTES} bytes (got $size): $file"
   fi
   encoded="$(gzip -c "$file" | base64 -w0)"
-  dl_do dl_task "$uuid" modify "plan:${encoded}"
+  dl_do dl_task_modify "$uuid" "plan:${encoded}"
 }
 
 # dl_plan_get <uuid> — write the original markdown to stdout for a task that
@@ -305,7 +344,7 @@ dl_plan_get() {
 # dl_plan_clear <uuid> — remove the plan UDA.
 dl_plan_clear() {
   local uuid="$1"
-  dl_do dl_task "$uuid" modify plan:
+  dl_do dl_task_modify "$uuid" plan:
 }
 
 # ---------------------------------------------------------------------------

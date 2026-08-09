@@ -255,7 +255,7 @@ claim_one() {
   else
     claim_value="${DEV_LOOP_OWNER}#$$-${RANDOM}${RANDOM}"
   fi
-  dl_do dl_task "$uuid" modify assignee:"$claim_value"
+  dl_do dl_task_modify "$uuid" assignee:"$claim_value"
   if [ -z "$DL_DRY_RUN" ]; then
     readback="$(dl_task_field "$uuid" '.assignee // ""')"
     if [ "$readback" != "$claim_value" ]; then

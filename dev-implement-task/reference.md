@@ -368,6 +368,39 @@ Because state is durable here and not in the agent's head, resume interrupted
 work from `task <uuid> export` and `dl-status.sh` instead of remembered
 build/test churn.
 
+### Never call `task modify` with a UDA directly — use `dl_task_modify`
+
+Taskwarrior converts an argument it does not recognize as an attribute into
+**description text** and exits `0`. On an rc where the `assignee` UDA is
+undefined, `task <uuid> modify assignee:` does not clear anything — it replaces
+the task's title with the literal string `assignee:`, silently and successfully.
+The original title is not recoverable from Taskwarrior afterwards.
+
+`dl-setup.sh` registers `assignee` and `plan`, so this only bites when setup was
+skipped, when `TASKRC` points at another profile (a second board's rc, or the
+user's personal `~/.taskrc`), or when a caller passes an attribute this skill
+never registered. All three happen in practice, and the failure is silent, so an
+exit code is not evidence the write did what you asked.
+
+`dl_task_modify <uuid> <arg…>` in `dl-common.sh` is the safe form: it reads the
+description before and after, restores the original title and exits `$DL_PRECOND`
+if the modify overwrote it, and passes an explicit `description:`/`desc:` rewrite
+through unchecked. Every UDA-bearing modify in the scripts goes through it
+(`dl-claim.sh` `assignee:`, `dl-release.sh` `assignee:`, `dl_plan_put`/`dl_plan_clear`
+`plan:`). Built-in attributes (`start:`, `depends:`, `status:`) cannot be
+undefined and are called directly.
+
+The same trap applies to anything you type by hand. `task <uuid> modify --
+state:Blocked` and `task <uuid> modify 'review-start:'` both eat the title:
+`--` forces the rest to be description text, and `review-start` is an
+*annotation* here, not a UDA — clear one with
+`task <uuid> denotate '<exact annotation text>'`. When you must hand-modify, read
+the title back:
+
+```sh
+task "$uuid" export | jq -r '.[0].description'
+```
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -376,6 +409,8 @@ build/test churn.
 | `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
 | Workers keep claiming the same task and releasing it unworked | The task is blocked by another task and nobody recorded it, so it stays `+READY` every round. Release it with `dl-release.sh <uuid> --blocked-by <blocker-uuid>`; read its `blocked-by=` annotations to see whether an earlier worker already identified the blocker. |
+| A task's title was replaced by a bare `assignee:` / `plan:` / `state:Blocked` string | A `task modify` was called with an argument Taskwarrior did not recognize as an attribute, so it became description text and exited `0`. See "Never call `task modify` with a UDA directly" above. The old title is gone from Taskwarrior; recover it from the task's own annotations, the branch/box name, or `dl-status.sh` output. |
+| Any script exits `20` "refusing a modify that overwrote the task description" | `dl_task_modify` caught that clobber and restored the title. The UDA named in the message is not defined in the active rc — run `dl-setup.sh`, or check `TASKRC` is pointing at the board you think it is. |
 | `--blocked-by` exits `20` "would create a dependency cycle" | The proposed blocker already depends (directly or transitively) on the task you are releasing. One of the two tasks is scoped wrong — the loop cannot resolve a cycle by waiting. Escalate it rather than forcing the dependency. |
 | A task blocked with `--blocked-by` never becomes claimable | Its blocker is still pending. `task <uuid> export \| jq '.[0].depends'` names it; completing (not releasing) the blocker is what clears the dependency. |
 | `dl-box.sh`/`dl-run.sh`/`dl-merge-back.sh` exits `10` | The task is unclaimed or owned by someone else. Claim it first with `dl-claim.sh`, pick another task, or pass `--force` only for an intentional override. |
