@@ -180,11 +180,21 @@ if [ "$task_count" -gt 0 ]; then
     || dl_die "$DL_PRECOND" "could not collect review branches for loop $LOOP_ID"
 fi
 
+# The task and review payloads can exceed the kernel argv limit on large
+# queues, so they go through files rather than --argjson.
+TASKS_FILE="$(mktemp)"
+REVIEWS_FILE="$(mktemp)"
+trap 'rm -f "$TASKS_FILE" "$REVIEWS_FILE"' EXIT
+printf '%s' "$normalized" >"$TASKS_FILE"
+printf '%s' "$reviews" >"$REVIEWS_FILE"
+
 jq -n \
   --arg project "$DL_REPO_PROJECT" --arg repo_id "$DL_REPO_ID" \
   --arg goal "$GOAL" --arg loop_id "$LOOP_ID" --arg route "$ROUTE" \
-  --argjson round "$current_round" --argjson tasks "$normalized" \
-  --argjson reviews "$reviews" '
+  --argjson round "$current_round" \
+  --slurpfile tasks_file "$TASKS_FILE" \
+  --slurpfile reviews_file "$REVIEWS_FILE" '
+  $tasks_file[0] as $tasks | $reviews_file[0] as $reviews |
   def current_pending: [$tasks[] | select(.status == "pending" and .loop_round == $round)];
   # One worker drains one queue at every stage, so this controller can only
   # claim tasks on its own route; dl-claim.sh and dlc-claim.sh refuse the rest.
@@ -199,7 +209,11 @@ jq -n \
   def unmerged_own: ([delegated[].uuid]) as $elsewhere
     | [$reviews[]
        | select(.merged | not)
-       | select(($elsewhere | index(.task.uuid // "")) == null)];
+       # Bind the uuid before piping into index(); a jq function argument is
+       # evaluated against the input at the call site, which here is
+       # $elsewhere, not the review object.
+       | (.task.uuid // "") as $tu
+       | select(($elsewhere | index($tu)) == null)];
   {
     project: $project, repo_id: $repo_id, goal: $goal, loop_id: $loop_id,
     current_round: $round, route: $route,
