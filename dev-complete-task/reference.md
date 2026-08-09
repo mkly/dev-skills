@@ -41,6 +41,7 @@ Completion writes:
 | `dev-complete-task: merged ...` | audit note from `dlc-merge.sh` |
 | `dev-complete-task: review claimed ...` | reviewer lock lifecycle audit |
 | `dev-loop: completed outcome=<value> ...` | terminal lifecycle event from `dlc-done.sh` |
+| `review-fix: <finding>` | finding the reviewer repaired on the review branch instead of filing |
 | `review-of: <short> <branch>` | follow-up task points to its reviewed producer |
 
 `dlc-done.sh` clears the `plan` UDA on `--outcome merged` only; `stacked` and
@@ -168,7 +169,7 @@ scripts/dlc-test.sh "$branch" --keep-box -- bash -lc 'make build'
 
 Run last, after the diff review clears — the suite takes 10+ minutes and is
 almost always green, so it's a final gate, not a way to find problems. Skip it
-if a finding already routes the branch to Findings.
+if a major blocker already routes the branch to Findings.
 
 The helper checks out the branch in a dedicated external worktree, warms a
 short-lived lease, syncs tracked files, and forwards the command exit code. It
@@ -211,6 +212,38 @@ Reserve `scripts/dlc-merge.sh "$branch" --abort` for conflicts that genuinely
 cannot be reconciled in the integration checkout — the branch needs
 reimplementation against the new base. It backs the merge out, keeps the branch,
 and the producer then goes to Findings with a rebase/reimplement fix task.
+
+### Fix a finding instead of filing it
+
+This is the default path for every finding that is not a major blocker;
+SKILL.md decides that, and this is the mechanics. The fix goes on the
+review branch before the merge, in the branch's verification worktree
+(`$DLC_WORKTREE_DIR/<branch slug>`, logged by `dlc-test.sh` on every run):
+
+```sh
+scripts/dlc-test.sh "$branch" --compact -- bash -lc '<acceptance command>'
+wt=<path from the "test worktree for <branch>" log line>
+# edit under "$wt"
+git -C "$wt" commit -am "fix: <finding> (review of ${uuid:0:8})"
+scripts/dlc-test.sh "$branch" --compact -- bash -lc '<acceptance command>'
+task rc.confirmation=no annotate "$uuid" "review-fix: <finding>"
+scripts/dlc-merge.sh "$branch"
+scripts/dlc-done.sh "$uuid" --outcome merged
+task rc.confirmation=no sync
+```
+
+The worktree is checked out on the branch, so committing there moves the branch
+tip and `dlc-test.sh` still treats the worktree as fresh, syncs it, and re-runs
+the checks in a box. Repeat the edit/commit/verify cycle for as many commits as
+the fixes need. The extra commits sit outside the recorded `commits=` range and
+do not disturb finalization: `outcome=merged` checks that the recorded
+implementation head is an ancestor of HEAD, not that it equals HEAD.
+
+Do not fix in the integration checkout after the merge — `dlc-test.sh` requires
+a review branch with a producing task, so a post-merge commit has no supported
+way to be verified in a box, and acceptance checks never run on the host. If a
+fix turns into a major blocker, `git -C "$wt" reset --hard <recorded head>` and
+file a follow-up task instead.
 
 ### Finalize a planned stack predecessor
 

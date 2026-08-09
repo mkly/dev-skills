@@ -109,8 +109,10 @@ For each claimable UUID:
      conflict (exit `40`) is resolved in place and finished with
      `dlc-merge.sh --continue`, not routed to findings;
    - verified stack predecessor: preserve its branch and finalize `stacked`;
-   - findings: create accepted next-round tasks with `dct-create.sh
-     --from-task`, rooted on the preserved branch, then finalize `superseded`.
+   - findings: fix them on the review branch and merge as clean — that is the
+     default; only a major blocker (see `dev-complete-task`) creates accepted
+     next-round tasks with `dct-create.sh --from-task`, rooted on the preserved
+     branch, then finalizes `superseded`.
 
    `stacked` and `superseded` keep the review branch alive, so both require a
    still-pending successor recorded as `successor=` on the producer;

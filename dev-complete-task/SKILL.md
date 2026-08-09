@@ -1,6 +1,6 @@
 ---
 name: dev-complete-task
-description: Review and finish one implemented Taskwarrior task by verifying its local review branch, then merging clean work or creating durable follow-up tasks and cleaning resources.
+description: Review and finish one implemented Taskwarrior task by verifying its local review branch, fixing the findings on it, then merging, or creating durable follow-up tasks when a major blocker stops the merge, and cleaning resources.
 ---
 
 # Dev Complete Task
@@ -21,6 +21,9 @@ keep the target repository as the current directory. Use bundled scripts'
   Resolving that merge's conflicts there is part of merging, not implementing a
   fix; anything beyond reconciling the two sides belongs in a follow-up task.
   Never push or force-delete an unmerged branch.
+- Fixing a finding yourself on the review branch is the default outcome; see
+  [Fix findings directly](#fix-findings-directly). Filing a follow-up task is
+  the exception, reserved for a major blocker.
 - Finalize only after a merge, durable successor, or durable finding batch.
 - Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values:
   inherit them verbatim; never assign, overwrite, or unset them.
@@ -53,8 +56,10 @@ and—when active—the current owner. Review correctness, regression risk,
 security, secrets, and debug or attribution residue from the diff first; the
 suite takes 10+ minutes and is nearly always green, so treat it as a final
 gate, not a discovery tool. Run `dlc-test.sh "$branch" --compact -- <command>`
-from `COMPLETE_SKILL` only once the diff review clears — skip it if a finding
-already routes the branch to Findings. Record one evidence-backed verdict.
+from `COMPLETE_SKILL` only once the diff review clears — skip it if a major
+blocker already routes the branch to Findings. Findings alone do not send a
+branch to Findings: fix them on the branch first, then run the suite once over
+the result. Record one evidence-backed verdict.
 
 ## Apply the verdict
 
@@ -84,11 +89,67 @@ reclaimed for review — `dlc-claim.sh` requires `status:pending` — so a
 preserved branch whose successors have all closed is stranded permanently
 outside the integration branch. Never reach for `--force` to get past this;
 create or reopen a successor instead.
-- **Findings:** create one independently acceptable fix per finding through
+- **Findings:** this path opens only once a major blocker is established. Then
+  every finding you did not fix directly gets one independently
+  acceptable fix task through
   `$CREATE_SKILL/scripts/dct-create.sh --from-task "$uuid"`. Root the
   first fix on the preserved producer branch and chain overlapping fixes. Sync
   and verify the complete batch before finalizing the producer with
   `--outcome superseded`. Never merge or delete its branch.
+
+## Fix findings directly
+
+Fix what you find. A follow-up task costs another worker round, another box, and
+another review, so a finding you can correct and prove here is finished here —
+including ones that run to several files or a few commits, and ones that need a
+new test or a new acceptance criterion you add to the producer. Read enough
+surrounding code to be sure of the fix; leaving the diff is expected, not
+disqualifying.
+
+Route a finding to Findings only when it is a **major blocker** — one of:
+
+- The fix means reimplementing the task's approach, or rewriting most of the
+  diff, rather than correcting it.
+- It needs a decision that is not yours to make: ambiguous product intent, a
+  behavior contract or public API whose consumers must agree, a schema or data
+  migration whose rollout has to be planned.
+- It reaches well outside the task's scope — a separate subsystem, a dependency
+  upgrade, a repo-wide refactor — and would turn one task into two anyway.
+- You tried the fix and it did not converge: verification still fails, or the
+  change keeps growing as you pull on it.
+- The branch genuinely cannot be reconciled with the current base and needs
+  reimplementation against it.
+
+Security, auth, and concurrency findings are not automatically blockers — fix
+them if the correct fix is clear and the acceptance checks prove it; escalate
+them when the right behavior is a judgment call. Uncertainty about *what* the
+code should do is a blocker; uncertainty about *how* to write the fix is not,
+so work it out.
+
+One major blocker settles the whole round: the branch is not merging, so file
+the remaining findings alongside it rather than committing on a branch a
+successor is about to build on. Fix directly whenever no finding is a blocker.
+
+Fix on the review branch, before the merge, in the verification worktree
+`dlc-test.sh` keeps for that branch — never in the producer's own worktree and
+never in the integration checkout. `dlc-test.sh` logs the path it uses and
+reuses it as long as it sits at the branch tip, so a commit made there is the
+branch tip and stays verifiable in a box:
+
+```sh
+wt=<path dlc-test.sh logged for this branch>
+# edit under "$wt", then:
+git -C "$wt" commit -am "fix: <finding> (review of ${uuid:0:8})"
+"$COMPLETE_SKILL/scripts/dlc-test.sh" "$branch" --compact -- <command>
+task rc.confirmation=no annotate "$uuid" "review-fix: <finding>"
+```
+
+Then merge and finalize `--outcome merged` as usual; the extra commits land with
+the branch, and the recorded implementation head stays an ancestor of HEAD.
+Report each direct fix alongside the verdict — a fixed finding is still a
+finding, and the user sees it or it did not happen. If a fix turns into a major
+blocker while you work it, stop editing, reset the branch back to the recorded
+implementation head, and file it as a follow-up task instead.
 
 After the final sync, verify terminal task state, required branch preservation
 or deletion, and cleanup with `$IMPLEMENT_SKILL/scripts/dl-status.sh`.
