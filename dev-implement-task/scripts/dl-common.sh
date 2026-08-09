@@ -425,9 +425,11 @@ dl_box_holder() {
       ' 2>/dev/null
 }
 
-# dl_idle_box_file — path of this repo's parked-box state file.
+# dl_idle_box_file — path of this repo's parked-box state file, namespaced by
+# Incus remote so a local pool and a remote pool never share the slot.
 dl_idle_box_file() {
-  printf '%s/idle-box-%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)"
+  local r="${INCUS_REMOTE:-${CRABBOX_INCUS_REMOTE:-}}"
+  printf '%s/idle-box-%s%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)" "${r:+-$r}"
 }
 
 # dl_idle_box_park <handle> — record <handle> as this repo's parked box.
