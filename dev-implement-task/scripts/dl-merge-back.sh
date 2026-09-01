@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dl-merge-back.sh — snapshot implementation work onto a NEW local branch.
 #
-#   dl-merge-back.sh <uuid> [<branch>] [--force] [--dry-run]
+#   dl-merge-back.sh <uuid> [<branch>] [--summary <text>] [--force] [--dry-run]
 #
 # The task's git worktree (recorded as worktree=, rooted at the recorded base) is
 # the single source of truth: the agent edits there and the box is a build/test
@@ -26,11 +26,14 @@ IFS=$'\n\t'
 
 usage() {
   cat >&2 <<'EOF'
-Usage: dl-merge-back.sh <uuid> [<branch>] [--force] [--dry-run] [-h|--help]
+Usage: dl-merge-back.sh <uuid> [<branch>] [--summary <text>] [--force]
+                        [--dry-run] [-h|--help]
 
-  <branch>    target local review branch (default: review/<task-slug>)
-  --force     bypass owner check
-  --dry-run   log what would happen instead of creating the branch
+  <branch>          target local review branch (default: review/<task-slug>)
+  --summary <text>  record the implementation summary as a `summary: ` note
+                    ("-" reads it from stdin). Review cannot start without one.
+  --force           bypass owner check
+  --dry-run         log what would happen instead of creating the branch
 
 Creates a NEW local branch from the task worktree's working tree, re-parented
 onto the recorded base, as one clean commit. Never pushes to a remote and never
@@ -39,9 +42,16 @@ Exit: 0 ok, 20 precondition, 30 no-op (identical to base) / branch already exist
 EOF
 }
 
-UUID=""; BRANCH=""; FORCE=0
+UUID=""; BRANCH=""; FORCE=0; SUMMARY=""; HAVE_SUMMARY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --summary)
+      shift
+      [ "$#" -gt 0 ] || { usage; dl_die "$DL_PRECOND" "--summary needs a value"; }
+      [ "$HAVE_SUMMARY" -eq 0 ] || dl_die "$DL_PRECOND" "--summary may be supplied only once"
+      if [ "$1" = "-" ]; then SUMMARY="$(cat)"; else SUMMARY="$1"; fi
+      HAVE_SUMMARY=1
+      ;;
     --force) FORCE=1 ;;
     --dry-run) DL_DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -58,6 +68,25 @@ dl_require git jq task
 dl_in_git_repo
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 [ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
+
+# The summary is half of dlc-claim.sh's review-ready predicate, and the half an
+# agent writes by hand. Recording it here — in the same call that produces the
+# branch — is the only point where both halves are guaranteed to use the
+# grammar their readers expect.
+record_summary() {
+  if [ "$HAVE_SUMMARY" -eq 1 ]; then
+    dl_anno_note "$UUID" summary "$SUMMARY"
+  elif [ -z "$(dl_anno_note_get "$UUID" summary)" ]; then
+    dl_warn "task $UUID has a review branch but no 'summary: ' note, so review"
+    dl_warn "cannot start: dlc-claim.sh refuses it as not review-ready and the"
+    dl_warn "loop poll counts it as no work. Record one now with:"
+    dl_warn "  dl-merge-back.sh $UUID --summary '<changes and checks>'"
+    if [ -n "$(dl_anno_get "$UUID" summary)" ]; then
+      dl_warn "(this task carries a 'summary=' annotation — that is machine-state"
+      dl_warn " grammar and no reader looks for it; re-record it as above)"
+    fi
+  fi
+}
 
 base="$(dl_anno_get "$UUID" base)"
 [ -n "$base" ] || dl_die "$DL_PRECOND" "task $UUID has no recorded base; run dl-box.sh $UUID first"
@@ -98,6 +127,7 @@ if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
   parents="$(git rev-list --parents -n1 "$BRANCH" 2>/dev/null || true)"
   if [ -n "$tip" ] && [ "$tip_tree" = "$snap_tree" ] && [ "$parents" = "$tip $base_full" ]; then
     dl_log "review branch already up to date: ${BRANCH}"
+    record_summary
     printf '%s\n' "$BRANCH"
     exit "$DL_OK"
   fi
@@ -144,6 +174,9 @@ if [ -n "$head_sha" ]; then
   dl_anno_set "$UUID" commits "${base:0:12}..${head_sha:0:12} (n=${ncommits})"
 fi
 dl_anno_event "$UUID" "merged worktree to local branch ${BRANCH}"
+
+record_summary
+
 dl_log "review branch ready: ${BRANCH} (NOT merged — review and merge deliberately)"
 git --no-pager log --oneline "${base}..${BRANCH}" >&2 || true
 git --no-pager diff --stat "${base}..${BRANCH}" >&2 || true

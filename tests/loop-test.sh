@@ -110,4 +110,46 @@ timeout 1s env CAPTURE="$TMP/held.args" PATH="$TMP/held:$PATH" \
 grep -Fq 'No pending standard-queue tasks' "$TMP/held.out" || \
   fail 'default route did not report an empty queue for a held task'
 
+# A finished review branch whose summary was recorded as `summary=` instead of
+# `summary: ` is invisible to every reader of the review-ready predicate. The
+# poll must still report it, or the queue looks merely empty while a completed
+# task sits unreviewable.
+mkdir "$TMP/misfiled"
+cat >"$TMP/misfiled/task" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    -ACTIVE) printf '[]\n'; exit 0 ;;
+  esac
+done
+printf '[{"uuid":"22222222-2222-2222-2222-222222222222","status":"pending",'
+printf '"start":"20260901T000000Z","annotations":['
+printf '{"description":"branch=review/dl-22222222-thing"},'
+printf '{"description":"summary=did the thing"}]}]\n'
+EOF
+cat >"$TMP/misfiled/capture-agent" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$CAPTURE"
+EOF
+chmod +x "$TMP/misfiled/"*
+ln -s capture-agent "$TMP/misfiled/claude"
+
+timeout 1s env CAPTURE="$TMP/misfiled.args" PATH="$TMP/misfiled:$PATH" \
+  "$ROOT/loop" --agent claude --complete-task >"$TMP/misfiled.out" 2>&1 || true
+
+[ ! -e "$TMP/misfiled.args" ] || \
+  fail 'complete route launched an agent for a task with a misfiled summary'
+grep -Fq 'recorded summary= instead' "$TMP/misfiled.out" || \
+  fail 'complete route did not report the misfiled summary'
+
+# The same fixture with a well-formed note is review-ready and must launch.
+sed 's/summary=did the thing/summary: did the thing/' \
+  "$TMP/misfiled/task" >"$TMP/misfiled/task.ok"
+mv "$TMP/misfiled/task.ok" "$TMP/misfiled/task"
+chmod +x "$TMP/misfiled/task"
+timeout 1s env CAPTURE="$TMP/wellformed.args" PATH="$TMP/misfiled:$PATH" \
+  "$ROOT/loop" --agent claude --complete-task >"$TMP/wellformed.out" 2>&1 || true
+[ -e "$TMP/wellformed.args" ] || \
+  fail 'complete route ignored a review-ready task with a summary: note'
+
 printf 'loop-test: ok\n'

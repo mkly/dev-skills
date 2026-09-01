@@ -291,6 +291,26 @@ count_completable() {
   numeric_count "review-ready ${task_scope}" "$n"
 }
 
+# Misfiled summaries: a task that reached a review branch but recorded its
+# summary as `summary=` (machine-state grammar) instead of `summary: ` (note
+# grammar). Every reader of the review-ready predicate — count_completable
+# above and dlc-claim.sh alike — looks only for the note form, so such a task is
+# finished work that no reviewer can ever pick up. It is indistinguishable from
+# an empty queue at the poll, which is exactly what makes it expensive: the
+# branch sits unreviewed for as long as nobody thinks to look. Counting it
+# separately turns a silent stall into a message on the first idle tick.
+count_misfiled_summary() {
+  local n
+  n="$(task rc.verbose=nothing +ACTIVE "${queue_filter[@]}" export | jq '
+    [ .[]
+      | select(any(.annotations[]?; .description | startswith("branch=")))
+      | select(any(.annotations[]?; .description | startswith("summary=")))
+      | select(all(.annotations[]?; .description | startswith("summary: ") | not))
+    ] | length
+  ' 2>/dev/null)" || n=""
+  numeric_count "misfiled-summary ${task_scope}" "$n"
+}
+
 eligible_count() {
   if "$complete_only"; then
     count_completable
@@ -345,12 +365,26 @@ run_agent() {
 # skill, and no amount of further relaunching resolves it.
 abandoned=0
 max_abandoned=3
+last_misfiled=-1
 
 while true; do
   pending_count="$(eligible_count)"
 
   if [ "$pending_count" -eq 0 ]; then
     printf 'No %s. Checking again in 30 seconds...\n' "$task_scope"
+    # Report the difference between "no work" and "work no reader can see", but
+    # only when the count changes: this branch runs every 30 seconds and a
+    # standing warning repeated forever is noise, not a diagnostic.
+    if ! "$implement_only" && ! "$plan_only"; then
+      misfiled="$(count_misfiled_summary)"
+      if [ "$misfiled" -gt 0 ] && [ "$misfiled" != "$last_misfiled" ]; then
+        printf 'loop: %d task(s) have a review branch but recorded summary= instead\n' \
+          "$misfiled" >&2
+        printf 'loop: of summary: — review cannot start on them and this queue will\n' >&2
+        printf 'loop: stay idle. Re-record each with dl-merge-back.sh <uuid> --summary.\n' >&2
+      fi
+      last_misfiled="$misfiled"
+    fi
     sleep 30
     continue
   fi

@@ -284,6 +284,37 @@ dl_anno_set() {
   dl_do dl_task "$uuid" annotate "${key}=${value}"
 }
 
+# dl_anno_note <uuid> <key> <text> — append a `key: text` HUMAN NOTE.
+#
+# Deliberately distinct from dl_anno_set's `key=value` machine state: readers
+# use two different jq accessors, and `summary=` is invisible to every consumer
+# that looks for `summary: `. Getting that grammar wrong on a summary strands a
+# finished review branch — dlc-claim.sh refuses the task as "not review-ready"
+# and loop's poll counts it as no work — so the note keys have a writer of their
+# own rather than being hand-typed at `task annotate`.
+#
+# Annotations are single-line: newlines are folded to spaces so the recorded
+# text stays greppable by the `startswith("key: ")` predicates that read it.
+dl_anno_note() {
+  local uuid="$1" key="$2" text="$3"
+  text="$(printf '%s' "$text" | tr '\n\r' '  ' | sed 's/  */ /g; s/^ //; s/ $//')"
+  [ -n "$text" ] || dl_die "$DL_PRECOND" "refusing to record an empty ${key}: note"
+  dl_do dl_task "$uuid" annotate "${key}: ${text}"
+}
+
+# dl_anno_note_get <uuid> <key> — latest `key: text` note value, or empty.
+dl_anno_note_get() {
+  local uuid="$1" key="$2"
+  dl_task_export "$uuid" \
+    | jq -r --arg k "$key" '
+        (.[0].annotations // [])
+        | map(.description)
+        | map(select(startswith($k + ": ")))
+        | last // ""
+        | if . == "" then "" else (.[($k|length)+2:]) end
+      ' 2>/dev/null
+}
+
 # dl_anno_event <uuid> <message> — append a free-form lifecycle note.
 dl_anno_event() {
   local uuid="$1" msg="$2"

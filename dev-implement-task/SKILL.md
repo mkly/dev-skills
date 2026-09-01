@@ -62,8 +62,19 @@ keep the target repository as the current checkout. Use each bundled script's
    think your change could affect — name those tests or their file explicitly
    rather than invoking the whole suite and filtering by eye. Use raw mode for
    exact diagnostics.
-6. Snapshot with `$IMPLEMENT_SKILL/scripts/dl-merge-back.sh "$uuid"`, annotate a durable
-   `summary:` of changes and checks, and sync Taskwarrior.
+6. Snapshot the work and record its durable summary in one call, then sync
+   Taskwarrior:
+
+   ```sh
+   "$IMPLEMENT_SKILL/scripts/dl-merge-back.sh" "$uuid" \
+     --summary '<changes made, and the checks run with their results>'
+   ```
+
+   Pass `--summary` rather than annotating by hand. The summary is half of the
+   predicate that makes a task reviewable, and it must be a `summary: ` note,
+   never a `summary=` annotation: `summary=` is machine-state grammar, no reader
+   looks for it, and a branch carrying one is finished work that no reviewer can
+   ever claim. The flag writes the grammar its readers expect.
 7. Re-export and require the original claim, pending/active status, resolving
    `branch=`, `base=`, `commits=`, and `summary:`.
 
