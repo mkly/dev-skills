@@ -30,10 +30,13 @@ assert_error '--standard, --small, --large, and --plan are mutually exclusive' \
 assert_error '--standard, --small, --large, and --plan are mutually exclusive' \
   --agent codex --model gpt-test --standard --plan
 assert_error 'unknown argument: --no-small' --agent codex --no-small
+assert_error '--effort is not supported by agent qwen' --agent qwen --effort high
 
 help="$($ROOT/loop --help)"
 printf '%s\n' "$help" | grep -Fq -- '[--model <model>] [--effort <effort>]' || \
   fail 'help omits model and effort options'
+printf '%s\n' "$help" | grep -Fq -- '<codex|claude|agy|qwen>' || \
+  fail 'help omits the qwen agent'
 
 mkdir "$TMP/bin"
 cat >"$TMP/bin/task" <<'EOF'
@@ -52,6 +55,7 @@ chmod +x "$TMP/bin/"*
 ln -s capture-agent "$TMP/bin/codex"
 ln -s capture-agent "$TMP/bin/claude"
 ln -s capture-agent "$TMP/bin/agy"
+ln -s capture-agent "$TMP/bin/qwen"
 
 run_and_capture() {
   selected_agent="$1"
@@ -78,6 +82,19 @@ for selected_agent in claude agy; do
   grep -Fxq -- 'medium' "$TMP/$selected_agent.args" || \
     fail "$selected_agent effort value not forwarded"
 done
+
+# qwen is checked apart from the loop above because it takes --model but has no
+# effort control at all. Its prompt is delivered interactively, so the worker
+# stays resident and only dl-finish.sh's kill ends the run.
+run_and_capture qwen --model qwen-test
+grep -Fxq -- '--model' "$TMP/qwen.args" || fail 'qwen model flag not forwarded'
+grep -Fxq -- 'qwen-test' "$TMP/qwen.args" || fail 'qwen model value not forwarded'
+grep -Fxq -- '--yolo' "$TMP/qwen.args" || fail 'qwen was not launched in yolo mode'
+grep -Fxq -- '--prompt-interactive' "$TMP/qwen.args" || \
+  fail 'qwen prompt was not delivered interactively'
+if grep -Fxq -- '--effort' "$TMP/qwen.args"; then
+  fail 'qwen was handed an effort flag it cannot honor'
+fi
 
 # A task another worker holds mid-implementation is neither claimable (it is
 # +ACTIVE and assigned) nor review-ready (no branch=/summary: yet). The default

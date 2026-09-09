@@ -36,7 +36,7 @@ EOF
 # AGENT_FINISH makes the fake agent call the one thing a real run must end with.
 # Leaving it unset is the abandoned-run case: the process exits having written
 # no marker, exactly like an agent that ended its turn waiting on a box gate.
-for name in codex claude agy; do
+for name in codex claude agy qwen; do
   cat >"$TMP/bin/$name" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\t%s\t%s\t%s\n' "$(basename "$0")" "${AGENT_PID:-}" \
@@ -101,6 +101,14 @@ grep -Fq -- 'are mutually exclusive' "$TMP/validation.err" \
 expect_2 --agent codex --no-small
 grep -Fq -- 'unknown argument: --no-small' "$TMP/validation.err" \
   || fail "the removed --no-small flag was silently accepted"
+expect_2 --agent qwen --effort high
+grep -Fq -- '--effort is not supported by agent qwen' "$TMP/validation.err" \
+  || fail "qwen accepted an --effort it has no way to honor"
+# Agent identity is diagnosed before any per-agent flag rule, so a typo is still
+# reported as a typo rather than as an effort mismatch.
+expect_2 --agent nope --effort high
+grep -Fq -- 'unsupported agent: nope' "$TMP/validation.err" \
+  || fail "the qwen effort check preempted agent validation"
 
 clear_case
 set +e
@@ -200,6 +208,14 @@ grep -Fq 'remove the +LARGE tag, release the claim, and sync' "$AGENT_LOG" \
 check_agent codex '--yolo ' plan \
   'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN export' \
   'Do not implement, review, or merge any work the plan describes.' --plan
+
+# qwen mirrors agy's resident interactive worker and forwards --model, but takes
+# no effort at all. Running it over the plan route also shows the queue binding
+# and the lifecycle prompt are agent-independent rather than codex-specific.
+check_agent qwen '--yolo --model qwen-test --prompt-interactive ' plan \
+  'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN export' \
+  'Do not implement, review, or merge any work the plan describes.' \
+  --plan --model qwen-test
 
 # Every queue binds the claim through the environment the agent inherits, not
 # just through the prompt prose it may ignore.

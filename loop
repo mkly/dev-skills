@@ -4,7 +4,7 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: loop --agent <codex|claude|agy> [--standard|--small|--large|--plan]
+Usage: loop --agent <codex|claude|agy|qwen> [--standard|--small|--large|--plan]
             [--implement-task|--complete-task]
             [--model <model>] [--effort <effort>]
             [--prompt-suffix <text>]
@@ -121,7 +121,7 @@ if "$plan_only" && { "$implement_only" || "$complete_only"; }; then
 fi
 
 case "$agent" in
-  codex|claude|agy) ;;
+  codex|claude|agy|qwen) ;;
   "")
     printf 'loop: --agent is required\n' >&2
     usage >&2
@@ -133,6 +133,16 @@ case "$agent" in
     exit 2
     ;;
 esac
+
+# Qwen Code has no reasoning-effort control, so --effort has nothing to map to
+# for it. Dropping the flag quietly would leave an operator believing a worker
+# is running at an effort it never received; the other three agents do take one,
+# so the mismatch is per-agent rather than a global rule.
+if [ "$agent" = qwen ] && [ -n "$effort" ]; then
+  printf 'loop: --effort is not supported by agent qwen\n' >&2
+  usage >&2
+  exit 2
+fi
 
 # Each loop process is one worker and needs its own claim identity. Workers that
 # share a DEV_LOOP_OWNER are indistinguishable to dl-claim.sh, which reads a
@@ -354,6 +364,12 @@ run_agent() {
       bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
         agy --dangerously-skip-permissions "${agent_args[@]}" \
           --prompt-interactive "$prompt"
+      ;;
+    qwen)
+      # No effort mapping here: the validation above rejects --effort for this
+      # agent rather than letting it fall through unwired.
+      bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
+        qwen --yolo "${agent_args[@]}" --prompt-interactive "$prompt"
       ;;
   esac
 }
