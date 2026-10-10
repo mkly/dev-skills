@@ -55,16 +55,17 @@ failing is a blocker, never a reason to fall back locally.
    These always run — they are cheap, and unformatted or lint-dirty code wastes
    a review cycle. Fix what they report before merging back.
 
-   Tests are the exception, not the routine. Run them only when you have a
-   specific reason and it feels genuinely needed: the change is subtle enough
-   that you cannot tell from reading it whether it works, it touches logic with
-   non-obvious edge cases, a test already exists that directly covers the change,
-   or the task contract asks for test evidence. Otherwise skip them and let the
-   review agents catch what reading missed. Never run a broad suite to feel
-   thorough; when you do test, run only the tests you added and the ones you
-   think your change could affect — name those tests or their file explicitly
-   rather than invoking the whole suite and filtering by eye. Use raw mode for
-   exact diagnostics.
+   Be economical with tests. Your branch is not the last line of defense:
+   `dev-complete-task` reviews it, fixes the findings, and only then merges, so
+   you do not need to prove the whole repository still works. Run only tests
+   that are relevant to this change — the ones you added and the ones that
+   directly exercise the code you touched — and name those tests or their file
+   explicitly rather than invoking the whole suite and filtering by eye. Skip
+   tests entirely when reading the change is enough to trust it; reach for them
+   when the change is subtle, touches logic with non-obvious edge cases, an
+   existing test directly covers it, or the task contract asks for test
+   evidence. Never run a broad suite to feel thorough. Use raw mode for exact
+   diagnostics.
 6. Snapshot the work and record its durable summary in one call, then sync
    Taskwarrior:
 
