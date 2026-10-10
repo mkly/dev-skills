@@ -81,6 +81,14 @@ the result. Record one evidence-backed verdict.
   names its branch as `input:`, then finalize with `--outcome stacked`. Preserve
   the branch until the chain tip lands.
 
+`dlc-merge.sh` refuses normal merges, dry runs, continuation, and deletion of
+already-merged branches when a pending or waiting task in the repository names
+the branch as its latest `input:`. It checks across loops and reports consumer
+UUIDs. For an existing planned consumer, verify its dependency and input, then
+record `successor=<consumer-uuid>` on the producer before finalizing `stacked`.
+If a merge is already in progress, `--abort` remains available. A consumer
+discovered after the merge leaves the merged branch preserved for recovery.
+
 Both `stacked` and `superseded` close the producer while keeping its review
 branch alive, so each one transfers the obligation to merge that branch onto a
 successor. `dlc-done.sh` enforces the transfer: it refuses either outcome

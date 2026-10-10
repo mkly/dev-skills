@@ -21,7 +21,7 @@ set -euo pipefail
 while [ "$#" -gt 0 ] && [[ "$1" == rc.* ]]; do shift; done
 
 if [ "${1:-}" = export ] || [ "${2:-}" = export ]; then
-  jq -n --arg base "$MOCK_BASE" '[{
+  jq -n --arg base "$MOCK_BASE" --argjson consumers "${MOCK_CONSUMERS:-[]}" '[{
     uuid: "12345678-1234-1234-1234-123456789abc",
     description: "fixture task",
     project: "demo.merge",
@@ -33,7 +33,7 @@ if [ "${1:-}" = export ] || [ "${2:-}" = export ]; then
       {description: "acceptance: fixture lands"},
       {description: "summary: fixture implementation"}
     ]
-  }]'
+  }] + $consumers'
 elif [ "${2:-}" = annotate ]; then
   printf 'annotate\t%s\n' "${3:-}" >>"$MOCK_TASK_LOG"
 else
@@ -64,6 +64,23 @@ export DEV_LOOP_OWNER=fixture-owner
 export AGENT_PID=fixture-agent
 
 cd "$TMP/repo"
+# A planned consumer blocks both preview and mutation, even without depends.
+export MOCK_CONSUMERS='[{"uuid":"consumer","project":"demo.merge","status":"pending","annotations":[{"description":"input: refs/heads/review/fixture"}]}]'
+for mode in '' --dry-run; do
+  rc=0
+  $MERGE review/fixture ${mode:+"$mode"} >/dev/null 2>"$TMP/consumer.err" || rc=$?
+  [ "$rc" = 20 ] || fail "consumer guard exited $rc"
+  [ "$(git rev-parse HEAD)" = "$MOCK_BASE" ] || fail "blocked merge moved HEAD"
+  git show-ref --verify --quiet refs/heads/review/fixture || fail "blocked merge deleted branch"
+  grep -Fq 'consumer' "$TMP/consumer.err" || fail "consumer UUID missing"
+  grep -Fq -- '--outcome stacked' "$TMP/consumer.err" || fail "stacked guidance missing"
+done
+# Terminal consumers, other projects, and superseded input notes do not block.
+export MOCK_CONSUMERS='[
+ {"uuid":"closed","project":"demo.merge","status":"completed","annotations":[{"description":"input: review/fixture"}]},
+ {"uuid":"foreign","project":"other","status":"pending","annotations":[{"description":"input: review/fixture"}]},
+ {"uuid":"changed","project":"demo.merge","status":"pending","annotations":[{"description":"input: review/fixture"},{"description":"input: main"}]}
+]'
 result="$($MERGE review/fixture 2>"$TMP/merge.err")"
 [ "$result" = "$(git rev-parse HEAD)" ] || fail "stdout did not return integration HEAD"
 git merge-base --is-ancestor "$review_head" HEAD \
@@ -113,6 +130,12 @@ grep -Fq 'conflict markers' "$TMP/continue-markers.err" \
 
 printf 'resolved\n' >"$TMP/repo/fixture.txt"
 git -C "$TMP/repo" add fixture.txt
+export MOCK_CONSUMERS='[{"uuid":"waiting-consumer","project":"demo.merge","status":"waiting","annotations":[{"description":"input: review/fixture"}]}]'
+rc=0
+$MERGE review/fixture --continue >/dev/null 2>"$TMP/consumer-continue.err" || rc=$?
+[ "$rc" = 20 ] || fail "--continue ignored waiting consumer"
+[ -f .git/MERGE_HEAD ] || fail "blocked --continue committed merge"
+export MOCK_CONSUMERS='[]'
 result="$($MERGE review/fixture --continue 2>"$TMP/continue.err")"
 [ "$result" = "$(git -C "$TMP/repo" rev-parse HEAD)" ] \
   || fail "--continue did not return integration HEAD"
@@ -147,6 +170,7 @@ set -e
 [ "$rc" = 20 ] || fail "re-running over an in-progress merge exited $rc, expected 20"
 [ -f "$TMP/repo/.git/MERGE_HEAD" ] || fail "re-run disturbed the in-progress merge"
 
+export MOCK_CONSUMERS='[{"uuid":"consumer","project":"demo.merge","status":"pending","annotations":[{"description":"input: review/fixture"}]}]'
 $MERGE review/fixture --abort >/dev/null 2>"$TMP/abort.err"
 [ ! -f "$TMP/repo/.git/MERGE_HEAD" ] || fail "--abort did not end the merge"
 [ "$(git -C "$TMP/repo" rev-parse HEAD)" = "$before_abort" ] \
@@ -154,4 +178,11 @@ $MERGE review/fixture --abort >/dev/null 2>"$TMP/abort.err"
 git -C "$TMP/repo" show-ref --verify --quiet refs/heads/review/fixture \
   || fail "--abort deleted the review branch"
 
-printf 'ok: dlc-merge clean, conflict-resolution, and abort tests\n'
+# Already-merged refs must also remain available to consumers.
+git branch -f review/fixture HEAD
+rc=0
+$MERGE review/fixture >/dev/null 2>"$TMP/merged-consumer.err" || rc=$?
+[ "$rc" = 20 ] || fail "already-merged consumer guard exited $rc"
+git show-ref --verify --quiet refs/heads/review/fixture || fail "needed merged ref deleted"
+
+printf 'ok: dlc-merge clean, consumer guards, conflict-resolution, and abort tests\n'

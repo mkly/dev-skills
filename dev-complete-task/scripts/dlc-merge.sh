@@ -44,6 +44,8 @@ Usage: dlc-merge.sh <branch> [--dry-run]
   --abort      abort the in-progress merge of <branch> and keep the branch
 
 Merges the review branch into the current branch and deletes it (safe -d).
+Refuses while pending or waiting tasks in this repository name it as input.
+For a planned predecessor, record its successor and finalize as stacked.
 On conflict the merge is LEFT IN PROGRESS (exit 40) so the reviewer can resolve
 it; resolve, `git add` the files, then re-run with --continue.
 Exit: 0 ok, 20 precondition/usage, 30 branch missing, 40 conflict to resolve.
@@ -95,6 +97,27 @@ task_json="$(dlc_task_for_branch "$BRANCH")"
 uuid="$(printf '%s' "$task_json" | jq -r '.uuid // ""')"
 dlc_require_reviewer "$uuid"
 
+# Check all loops: a consumer's branch reference survives scheduling boundaries.
+# Older tasks without repo-id are matched by project, as a conservative fallback.
+require_no_consumers() {
+  local raw consumers
+  raw="$(dlc_task_export)" \
+    || dlc_die "$DLC_PRECOND" "could not inspect consumers of '$BRANCH'; branch kept"
+  consumers="$(printf '%s' "$raw" | jq -r --arg b "$BRANCH" \
+    --argjson producer "$task_json" "$DLC_JQ_DEFS"'
+    [ .[]
+      | select(.uuid != $producer.uuid)
+      | select(.status == "pending" or .status == "waiting")
+      | select(if note("repo-id") != "" and $producer.repo_id != ""
+          then note("repo-id") == $producer.repo_id
+          else (.project // "") == $producer.project end)
+      | select((note("input") | sub("^refs/heads/"; "")) == $b)
+      | .uuid ] | join(", ")')" \
+    || dlc_die "$DLC_PRECOND" "could not parse consumers of '$BRANCH'; branch kept"
+  [ -z "$consumers" ] \
+    || dlc_die "$DLC_PRECOND" "review branch '$BRANCH' is required by pending/waiting consumer(s): $consumers. Branch kept. For a planned stack predecessor, verify depends/input, record successor=<consumer-uuid>, and finalize with dlc-done.sh $uuid --outcome stacked instead of merging. If a merge is in progress, use --abort first."
+}
+
 # conflicted_paths — currently unmerged index entries, one per line
 # (repo-root-relative, so they read the same from any subdirectory).
 conflicted_paths() { git diff --name-only --diff-filter=U; }
@@ -117,6 +140,8 @@ leftover_markers() {
 # annotate the producing task, print the resulting HEAD.
 finish_merge() {
   local note="$1" wt_path
+  # Recheck after merging, before removing any worktrees or the review ref.
+  require_no_consumers
   # A dlc-test.sh (or other) worktree may still have $BRANCH checked out;
   # git branch -d refuses to delete a branch checked out elsewhere, so remove
   # any such worktree first.
@@ -158,6 +183,8 @@ if [ "$ABORT" -eq 1 ]; then
   git rev-parse HEAD
   exit 0
 fi
+
+require_no_consumers
 
 if [ "$CONTINUE" -eq 1 ]; then
   [ -n "$merge_head" ] \
