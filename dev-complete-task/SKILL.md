@@ -10,7 +10,9 @@ Give one review-ready task a terminal verdict: `merged`, `stacked`, or
 resolve `CREATE_SKILL`, `IMPLEMENT_SKILL`, `LOOP_SKILL`, and `BOARD_SKILL` as
 its siblings;
 keep the target repository as the current directory. Use bundled scripts'
-`--help` for exact flags and exits.
+`--help` for exact flags and exits. Verification runs in a dedicated host worktree
+by default; `CRABBOX_PROVIDER` opts into a separate Crabbox lease. Cleanup of an
+implementation lease uses its recorded provider, even if this reviewer runs locally.
 
 ## Boundary
 

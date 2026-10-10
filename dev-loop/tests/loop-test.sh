@@ -36,11 +36,13 @@ EOF
 # AGENT_FINISH makes the fake agent call the one thing a real run must end with.
 # Leaving it unset is the abandoned-run case: the process exits having written
 # no marker, exactly like an agent that ended its turn waiting on a box gate.
-for name in codex claude agy qwen; do
+for name in codex claude agy qwen devin copilot; do
   cat >"$TMP/bin/$name" <<'EOF'
 #!/usr/bin/env bash
+rendered="$*"
+rendered="${rendered//$'\n'/ }"
 printf '%s\t%s\t%s\t%s\n' "$(basename "$0")" "${AGENT_PID:-}" \
-  "${DEV_LOOP_ROUTE:-}" "$*" >>"$AGENT_LOG"
+  "${DEV_LOOP_ROUTE:-}" "$rendered" >>"$AGENT_LOG"
 if [ -n "${AGENT_FINISH:-}" ] && [ -n "${DEV_LOOP_FINISH_MARKER:-}" ]; then
   printf 'task-completed fixture\n' >"$DEV_LOOP_FINISH_MARKER"
 fi
@@ -104,6 +106,9 @@ grep -Fq -- 'unknown argument: --no-small' "$TMP/validation.err" \
 expect_2 --agent qwen --effort high
 grep -Fq -- '--effort is not supported by agent qwen' "$TMP/validation.err" \
   || fail "qwen accepted an --effort it has no way to honor"
+expect_2 --agent devin --effort high
+grep -Fq -- '--effort is not supported by agent devin' "$TMP/validation.err" \
+  || fail "devin accepted an --effort it has no way to honor"
 # Agent identity is diagnosed before any per-agent flag rule, so a typo is still
 # reported as a typo rather than as an effort mismatch.
 expect_2 --agent nope --effort high
@@ -212,10 +217,24 @@ check_agent codex '--yolo ' plan \
 # qwen mirrors agy's resident interactive worker and forwards --model, but takes
 # no effort at all. Running it over the plan route also shows the queue binding
 # and the lifecycle prompt are agent-independent rather than codex-specific.
-check_agent qwen '--yolo --model qwen-test --prompt-interactive ' plan \
+check_agent qwen '--yolo --model qwen-test --no-telemetry --prompt-interactive ' plan \
   'rc.verbose=nothing +READY -ACTIVE status:pending +PLAN export' \
   'Do not implement, review, or merge any work the plan describes.' \
   --plan --model qwen-test
+
+# Devin uses one-shot print mode and must bypass both tool approvals and the
+# workspace trust prompt, which cannot be answered in non-interactive mode.
+check_agent devin '--permission-mode dangerous --respect-workspace-trust false --model devin-test -p ' implement \
+  'rc.verbose=nothing +READY -ACTIVE status:pending -SMALL -LARGE -PLAN export' \
+  'Do not review, merge, or complete the task.' \
+  --implement-task --model devin-test
+
+# Copilot supports both model and reasoning-effort overrides. Prompt mode also
+# needs explicit tool permission and no ask_user tool for an unattended worker.
+check_agent copilot '--allow-all --no-ask-user --model copilot-test --effort high -p ' complete \
+  'rc.verbose=nothing +ACTIVE status:pending -SMALL -LARGE -PLAN export' \
+  'Do not claim or implement unrelated pending work.' \
+  --complete-task --model copilot-test --effort high
 
 # Every queue binds the claim through the environment the agent inherits, not
 # just through the prompt prose it may ignore.
@@ -335,5 +354,56 @@ grep -Fq 'loop: run finished (task-completed fixture)' "$TMP/finished.out" \
 
 [ ! -s "$RESET_LOG" ] \
   || fail "non-interactive runs unexpectedly reset the terminal"
+
+# All agent backends receive project context, and each invocation refreshes it.
+mkdir "$TMP/knowledge-project"
+git -C "$TMP/knowledge-project" init -q
+export KNOWLEDGE_HELPER="$ROOT/dev-knowledge/scripts/knowledge.py"
+printf '# Working knowledge\nRecipe version one\n' >"$TMP/first.md"
+printf '# Working knowledge\nRecipe version two\n' >"$TMP/second.md"
+export KNOWLEDGE_REPLACEMENT="$TMP/second.md"
+cd "$TMP/knowledge-project"
+python3 "$KNOWLEDGE_HELPER" update --if-none-match '*' --body "$TMP/first.md" >/dev/null
+for name in codex claude agy qwen devin copilot; do
+  clear_case
+  printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
+  set +e
+  "$LOOP" --agent "$name" --complete-task >"$TMP/knowledge.out" 2>"$TMP/knowledge.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 143 ] || fail "$name knowledge launch failed: $rc"
+  grep -Fq 'Recipe version one' "$AGENT_LOG" || fail "$name missed knowledge"
+  grep -Fq 'ETag: "sha256-' "$AGENT_LOG" || fail "$name missed revision"
+done
+cat >"$TMP/bin/codex" <<'EOF'
+#!/usr/bin/env bash
+rendered="$*"
+printf '%s\n' "${rendered//$'\n'/ }" >>"$AGENT_LOG"
+revision="$(python3 "$KNOWLEDGE_HELPER" read | jq -r .etag)"
+python3 "$KNOWLEDGE_HELPER" update --if-match "$revision" --body "$KNOWLEDGE_REPLACEMENT" >/dev/null
+printf 'task-completed fixture\n' >"$DEV_LOOP_FINISH_MARKER"
+EOF
+clear_case
+printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
+export SLEEP_MAX=2
+set +e
+"$LOOP" --agent codex --complete-task >"$TMP/refresh.out" 2>"$TMP/refresh.err"
+rc=$?
+set -e
+[ "$rc" -eq 143 ] || fail "refresh launch failed: $rc"
+[ "$(wc -l <"$AGENT_LOG")" -eq 2 ] || fail 'refresh fixture did not run twice'
+sed -n '1p' "$AGENT_LOG" | grep -Fq 'Recipe version one' || fail 'first run missed original knowledge'
+sed -n '2p' "$AGENT_LOG" | grep -Fq 'Recipe version two' || fail 'second run received stale knowledge'
+
+# An unreadable/invalid document is distinct from an absent one and prevents launch.
+printf '\377' >.dev-knowledge.md
+clear_case
+printf '%s\n' "$READY_TASK" >"$TASK_EXPORT"
+set +e
+"$LOOP" --agent codex >"$TMP/bad-knowledge.out" 2>"$TMP/bad-knowledge.err"
+rc=$?
+set -e
+[ "$rc" -eq 20 ] || fail "invalid knowledge did not stop launcher: $rc"
+[ ! -s "$AGENT_LOG" ] || fail 'agent launched with unreadable knowledge'
 
 printf 'PASS: loop\n'

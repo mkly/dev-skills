@@ -73,6 +73,7 @@ git -C "$TMP/repo" branch review/compact
 export DLC_WORKTREE_DIR="$TMP/worktrees"
 export MOCK_RTK_MARKER="$TMP/rtk.marker"
 export DEV_LOOP_OWNER=fixture-owner
+export CRABBOX_PROVIDER=fixture
 export AGENT_PID=fixture-agent
 
 cat >"$TMP/expected.args" <<'EOF'
@@ -119,7 +120,7 @@ set -e
 [ "$fallback_rc" -eq 9 ] || fail "review fallback exited $fallback_rc, expected 9"
 [ "$(<"$TMP/fallback.out")" = '<raw fallback>' ] || fail "review fallback changed arguments"
 [ ! -e "$TMP/rtk.marker" ] || fail "review fallback unexpectedly invoked rtk"
-grep -Fq -- '--compact requested but rtk is unavailable in box; running unfiltered' "$TMP/fallback.err" \
+grep -Fq -- '--compact requested but rtk is unavailable; running unfiltered' "$TMP/fallback.err" \
   || fail "review fallback warning was not emitted"
 
 printf 'ok: dlc-test compact mode and fallback tests\n'

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dl-box.sh — warm (or reuse) one Incus box lease for a task, and
+# dl-box.sh — prepare a task worktree and optionally warm a Crabbox lease, and
 # create the per-task git worktree the agent edits in.
 #
 #   dl-box.sh <uuid> [--base <ref>] [--force] [--dry-run]
@@ -24,7 +24,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: dl-box.sh <uuid> [--base <ref>] [--force] [--dry-run] [-h|--help]
 
-Warm or reuse the Incus box for a claimed task. Prints the box handle on stdout.
+Prepare a claimed task's worktree. With CRABBOX_PROVIDER, warm or reuse a
+Crabbox lease and print its handle; otherwise print the local worktree path.
 Records box=<handle>, base=<resolved sha>, and worktree=<path> as annotations,
 and creates a per-task git worktree (branch dl/<slug>) for the agent to edit in.
 
@@ -50,10 +51,16 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$UUID" ] || { usage; dl_die "$DL_PRECOND" "task uuid required"; }
 
-dl_require git jq task crabbox
+dl_require git jq task
 dl_in_git_repo
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 [ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
+
+if [ -n "$(dl_anno_get "$UUID" box)" ]; then
+  dl_use_box_provider "$UUID"
+elif [ -n "$CRABBOX_PROVIDER" ]; then
+  dl_require crabbox
+fi
 
 desc="$(dl_task_field "$UUID" '.description // ""')"
 project="$(dl_task_field "$UUID" '.project // ""')"
@@ -153,6 +160,13 @@ ensure_worktree "$wt" "$wbranch" "$base"
 [ "$had_base" -eq 1 ] || dl_anno_set "$UUID" base "$base"
 [ "$had_wt" -eq 1 ]   || dl_anno_set "$UUID" worktree "$wt"
 
+if [ -z "$CRABBOX_PROVIDER" ]; then
+  dl_anno_set "$UUID" executor local
+  dl_log "local worktree ready for $UUID: $wt"
+  printf '%s\n' "$wt"
+  exit "$DL_OK"
+fi
+
 # 2. Reuse an existing live box if one is recorded AND still ours. A task that
 #    was released had its box parked for reuse while keeping the box=
 #    annotation, so a live lease here may since have been adopted by another
@@ -175,6 +189,8 @@ if [ "$existing_alive" -eq 1 ]; then
   parked="$(dl_idle_box_claim)"
   if [ -n "$parked" ] && [ "$parked" != "$existing" ]; then dl_idle_box_park "$parked"; fi
   dl_log "reusing live box for $UUID: $existing (worktree: $wt)"
+  dl_anno_set "$UUID" executor crabbox
+  dl_anno_set "$UUID" box-provider "$CRABBOX_PROVIDER"
   printf '%s\n' "$existing"
   exit "$DL_OK"
 fi
@@ -208,9 +224,7 @@ if [ -z "$DL_DRY_RUN" ]; then
   fi
 fi
 
-# 4. Warm a new lease if adoption did not produce one. Incus overrides (image,
-# remote, profile, ...) come from CRABBOX_INCUS_* env vars, which crabbox reads
-# on every subcommand.
+# 4. Warm a new lease if adoption did not produce one. Crabbox owns provider config.
 if [ -n "$handle" ]; then
   :
 elif [ -n "$DL_DRY_RUN" ]; then
@@ -249,6 +263,8 @@ fi
 
 # 5. Record machine state on the task (base/worktree already recorded above).
 dl_anno_set "$UUID" box "$handle"
+dl_anno_set "$UUID" executor crabbox
+dl_anno_set "$UUID" box-provider "$CRABBOX_PROVIDER"
 dl_anno_event "$UUID" "box ready: $handle (base ${base:0:12}, worktree $wt)"
 dl_log "box ready for $UUID: $handle (base ${base:0:12}, worktree $wt)"
 printf '%s\n' "$handle"

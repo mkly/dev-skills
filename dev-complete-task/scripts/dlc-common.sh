@@ -293,12 +293,11 @@ dlc_task_for_branch() {
 }
 
 # ---------------------------------------------------------------------------
-# Crabbox/Incus knobs for dlc-test.sh. Verification uses a branch-keyed lease so
+# Optional Crabbox knobs for dlc-test.sh. Verification uses a branch-keyed lease so
 # it cannot disturb the implementation task's owned box or worktree. It never
-# writes Taskwarrior state. Incus overrides (image, remote, profile, ...) come
-# from crabbox's own CRABBOX_INCUS_* env vars, which apply to every subcommand.
+# writes Taskwarrior state. Provider configuration is owned by Crabbox.
 # ---------------------------------------------------------------------------
-: "${CRABBOX_PROVIDER:=incus}"
+: "${CRABBOX_PROVIDER:=}"       # empty: execute in the host review worktree
 : "${DLC_TEST_TTL:=30m}"        # short-lived: one review check, not a work session
 : "${DLC_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-complete-task}"
 : "${DLC_WORKTREE_DIR:=${DLC_STATE_DIR}/worktrees}"  # per-branch checkouts (outside the repo tree)

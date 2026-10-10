@@ -27,14 +27,15 @@ dl_die()  { local code="$1"; shift; dl_err "$*"; exit "$code"; }
 # ---------------------------------------------------------------------------
 # Environment knobs (all overridable; documented in reference.md).
 # ---------------------------------------------------------------------------
-: "${CRABBOX_PROVIDER:=incus}"
+: "${CRABBOX_PROVIDER:=}"        # empty: execute in the host worktree
+: "${DEV_LOOP_BOX_SCOPE:=}"     # optional account/endpoint namespace for reuse
 : "${DEV_LOOP_TTL:=2h}"          # crabbox lease ttl
 : "${DEV_LOOP_STALE:=4h}"        # default age past which an active claim is "stale"
 : "${DEV_LOOP_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop}"
 : "${DEV_LOOP_WORKTREE_DIR:=${DEV_LOOP_STATE_DIR}/worktrees}"  # per-task git worktrees (outside the repo tree)
 : "${DEV_LOOP_TITLE:=auto}"       # auto updates the X11 window title; off disables it
 : "${DEV_LOOP_WINDOW_ID:=${WINDOWID:-}}"  # explicit override, primarily for launchers/tests
-export CRABBOX_PROVIDER DEV_LOOP_TTL DEV_LOOP_STALE DEV_LOOP_STATE_DIR DEV_LOOP_WORKTREE_DIR
+export CRABBOX_PROVIDER DEV_LOOP_BOX_SCOPE DEV_LOOP_TTL DEV_LOOP_STALE DEV_LOOP_STATE_DIR DEV_LOOP_WORKTREE_DIR
 export DEV_LOOP_TITLE DEV_LOOP_WINDOW_ID
 
 # Stable, attributable owner id. Distinctness between two agents as the same
@@ -434,14 +435,27 @@ dl_slug() {
 # Idle-box parking — dev-complete-task's dlc-done.sh parks a live lease instead
 # of stopping it, and the next dl-box.sh in the same repo adopts it (reclaim + sync)
 # instead of paying a fresh warmup. State is one file per repo holding the
-# lease handle; crabbox's own idle timeout reaps a parked box nobody adopts.
+# lease handle. Stop parked leases explicitly; automatic expiry is provider-dependent.
 # Claiming is an atomic rename so two concurrent dl-box.sh runs can never
 # adopt the same box.
 # ---------------------------------------------------------------------------
 # dl_box_alive <handle> — true if crabbox can see a live lease by that id/slug.
 dl_box_alive() {
   [ -n "${1:-}" ] || return 1
+  [ -n "$CRABBOX_PROVIDER" ] || return 1
   crabbox status -provider "$CRABBOX_PROVIDER" -id "$1" -json >/dev/null 2>&1
+}
+
+# Existing leases retain their provider across worker handoffs. Legacy tasks
+# without box-provider= require an explicit provider; never guess Incus.
+dl_use_box_provider() {
+  local saved
+  saved="$(dl_anno_get "$1" box-provider)"
+  CRABBOX_PROVIDER="${saved:-$CRABBOX_PROVIDER}"
+  [ -n "$CRABBOX_PROVIDER" ] \
+    || dl_die "$DL_PRECOND" "task $1 has a legacy box without a recorded provider; set CRABBOX_PROVIDER to its original provider"
+  export CRABBOX_PROVIDER
+  dl_require crabbox
 }
 
 # dl_box_holder <handle> [exclude-uuid] — print the uuid of a PENDING task that
@@ -477,11 +491,11 @@ dl_box_holder() {
       ' 2>/dev/null
 }
 
-# dl_idle_box_file — path of this repo's parked-box state file, namespaced by
-# Incus remote so a local pool and a remote pool never share the slot.
+# dl_idle_box_file — namespace parked leases by repo, provider, and optional scope.
 dl_idle_box_file() {
-  local r="${CRABBOX_INCUS_REMOTE:-}"
-  printf '%s/idle-box-%s%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)" "${r:+-$r}"
+  local scope
+  scope="$(printf '%s\n%s' "$CRABBOX_PROVIDER" "$DEV_LOOP_BOX_SCOPE" | cksum | cut -d' ' -f1)"
+  printf '%s/idle-box-%s-%s' "$DEV_LOOP_STATE_DIR" "$(dl_repo_key)" "$scope"
 }
 
 # dl_idle_box_park <handle> — record <handle> as this repo's parked box.

@@ -1,6 +1,6 @@
 ---
 name: dev-implement-task
-description: Claim and implement one queued Taskwarrior development task in its isolated worktree and Crabbox, then produce a local review branch without completing or merging the task.
+description: Claim and implement one queued Taskwarrior development task in its isolated worktree with optional Crabbox execution, then produce a local review branch without completing or merging the task.
 ---
 
 # Dev Implement Task
@@ -9,7 +9,10 @@ Turn one pending UUID into a review-ready local branch. Let `IMPLEMENT_SKILL`
 be this skill's absolute directory and `LOOP_SKILL` and `BOARD_SKILL` its
 siblings `dev-loop` and `dev-board`;
 keep the target repository as the current checkout. Use each bundled script's
-`--help` for flags and exit codes.
+`--help` for flags and exit codes. Checks run in the host worktree by default.
+Set `CRABBOX_PROVIDER` to opt into any compatible Crabbox provider; provider
+configuration and authentication belong to Crabbox. Selected remote execution
+failing is a blocker, never a reason to fall back locally.
 
 ## Boundary
 
@@ -40,9 +43,9 @@ keep the target repository as the current checkout. Use each bundled script's
    here and go straight to [Finish](#finish) with `worker-idle`. Empty stdout
    from an auto-pick is the same situation and takes the same path.
 3. Run `$IMPLEMENT_SKILL/scripts/dl-box.sh "$uuid"` and wait for its real exit status. Poll the
-   same yielded session through quiet warmup periods.
+   same yielded session through quiet warmup periods when Crabbox is selected.
 4. Edit the recorded worktree. Add new files to Git before box runs because
-   only tracked files sync into Crabbox.
+   only tracked files sync when Crabbox is selected.
 5. Run the repository's linters and formatters:
 
    ```sh

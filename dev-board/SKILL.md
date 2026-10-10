@@ -116,6 +116,12 @@ too, an approach abandoned and why, the reasoning behind an escalation, review
 context a later round needs. Do not post task transitions or work contracts;
 those belong in Taskwarrior.
 
+When a verified finding will save workers rediscovery across tasks, also update
+the project's current working knowledge through the sibling `dev-knowledge`
+helper. Keep the concise actionable conclusion and a link to this discussion
+there; retain the detailed evidence here. Use its ETag-checked update operation,
+never edit `.dev-knowledge.md` directly. Most board posts need no such update.
+
 ## Post a workaround
 
 Being blocked is not the only trigger. Post whenever an environment, tooling, or

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# dl-run.sh — run a command inside an implementation task's box.
+# dl-run.sh — run a command in a task worktree or its selected Crabbox lease.
 #
 #   dl-run.sh <uuid> [crabbox flags...] -- <cmd...>
 #   dl-run.sh <uuid> --compact -- <cmd...>       # compact output with in-box RTK
 #   dl-run.sh <uuid> --no-sync  -- <cmd...>      # skip the upload this run
 #   dl-run.sh <uuid> -sync-only --               # just sync, run nothing
 #
-# Sync model: the task's own git WORKTREE (recorded as worktree= by dl-box.sh) is
+# Local execution uses the recorded worktree directly. The following sync model
+# applies only when Crabbox is selected: the task's own git WORKTREE (recorded as worktree= by dl-box.sh) is
 # the single source of truth. Edit files there with normal tools; the box is a
 # build/test sandbox, NOT an editing surface (Crabbox does not forward stdin into
 # the box and never syncs .git, so in-box editing is unreliable). This wrapper
@@ -31,10 +32,10 @@ Usage: dl-run.sh <uuid> [--force] [--compact] [--no-sync|--resync] [crabbox run 
   --no-sync    skip the upload this run (default is to sync the local tree up)
   --resync     accepted for compatibility; syncing up is already the default
   --force      bypass owner check
-  --dry-run    log the crabbox invocation instead of running it
+  --dry-run    log the invocation instead of running it
 
-Forwards the in-box command's exit code. Exit 10 if the task is unclaimed or
-owned by another owner; exit 20 if the task has no warmed box (run dl-box.sh first).
+Forwards the command's exit code. Exit 10 if the task is unclaimed or
+owned by another owner; exit 20 if the task has no prepared worktree/lease (run dl-box.sh first).
 EOF
 }
 
@@ -58,12 +59,17 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-dl_require jq task crabbox
+dl_require jq task
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 [ "$FORCE" -eq 1 ] || dl_require_owner "$UUID"
 
 handle="$(dl_anno_get "$UUID" box)"
-[ -n "$handle" ] || dl_die "$DL_PRECOND" "task $UUID has no warmed box; run dl-box.sh $UUID first"
+executor="$(dl_anno_get "$UUID" executor)"
+if [ -n "$handle" ]; then
+  dl_use_box_provider "$UUID"
+elif [ "$executor" != local ]; then
+  dl_die "$DL_PRECOND" "task $UUID has no prepared execution environment; run dl-box.sh $UUID first"
+fi
 
 # Sync happens from the task's OWN worktree (the agent edits there), never the
 # shared checkout — that is what keeps concurrent tasks isolated. Crabbox picks
@@ -106,7 +112,19 @@ if [ "$COMPACT" -eq 1 ]; then
     escaped="${arg//\'/\'\\\'\'}"
     compact_command+="${compact_command:+ }'$escaped'"
   done
-  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then command=$1; shift; exec rtk test "$command"; fi; shift; printf "%s\n" "dev-implement-task: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-implement-task-compact "$compact_command" ${CMD[@]+"${CMD[@]}"})
+  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then command=$1; shift; exec rtk test "$command"; fi; shift; printf "%s\n" "dev-implement-task: WARN: --compact requested but rtk is unavailable; running unfiltered" >&2; exec "$@"' dev-implement-task-compact "$compact_command" ${CMD[@]+"${CMD[@]}"})
+fi
+
+if [ -z "$handle" ]; then
+  for e in ${EXTRA[@]+"${EXTRA[@]}"}; do
+    [ "$e" = "-sync-only" ] \
+      || dl_die "$DL_PRECOND" "Crabbox flag '$e' requires a Crabbox lease"
+  done
+  dl_log "run locally in $wt (compact=$COMPACT): ${CMD[*]:-<sync only>}"
+  [ "$sync_only" -eq 0 ] || exit "$DL_OK"
+  rc=0
+  dl_do "${payload[@]}" || rc=$?
+  exit "$rc"
 fi
 
 run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")

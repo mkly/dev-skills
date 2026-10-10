@@ -20,7 +20,9 @@ Keep the target repository's integration checkout as the current directory.
 |---|---|
 | `base=<sha>` | implementation diff base |
 | `worktree=<path>` | owned task worktree to clean after verdict |
-| `box=<handle>` | implementation lease to park or stop |
+| `box=<handle>` | optional implementation lease to park or stop |
+| `box-provider=<provider>` | saved provider used for implementation lease cleanup |
+| `executor=local` | implementation checks run in the host worktree |
 | `branch=<name>` | local review branch |
 | `commits=<range> (n=N)` | implementation commit range |
 | `acceptance: ...` | observable completion criteria |
@@ -86,11 +88,10 @@ producer task's implementation lease:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CRABBOX_PROVIDER` | `incus` | provider passed to every Crabbox call |
+| `CRABBOX_PROVIDER` | unset | Opt into Crabbox verification; otherwise run in the local review worktree. Implementation cleanup uses its recorded provider. |
 | `DLC_TEST_TTL` | `30m` | verification lease TTL |
 | `DLC_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-complete-task` | completion test state |
 | `DLC_WORKTREE_DIR` | `${DLC_STATE_DIR}/worktrees` | branch verification worktrees |
-| `CRABBOX_INCUS_*` | unset | Incus overrides read by crabbox itself on every subcommand (`CRABBOX_INCUS_IMAGE`, `CRABBOX_INCUS_REMOTE`, `CRABBOX_INCUS_INSTANCE_TYPE`, ...) |
 | `DEV_IMPLEMENT_TASK_SKILL_DIR` | sibling `../dev-implement-task` | installed implementation skill used by `dlc-done.sh` |
 | `DEV_LOOP_ROUTE` | unset (→ the untagged standard queue) | routing queue (`standard`, `small`, `large`, `plan`) exported by `loop`. `dlc-claim.sh` applies the same predicate as `dl-claim.sh`, so the queue that implemented a task is the queue that reviews it; an explicit `--standard`/`--small`/`--large`/`--plan` overrides it, and any other value is a precondition error (`20`). |
 
@@ -170,8 +171,10 @@ almost always green, so it's a final gate, not a way to find problems. Skip it
 if a major blocker already routes the branch to Findings.
 
 The helper checks out the branch in a dedicated external worktree, warms a
-short-lived lease, syncs tracked files, and forwards the command exit code. It
-does not reuse or mutate the producer's task box. `--compact` uses in-box RTK
+short-lived lease when `CRABBOX_PROVIDER` is set, syncs tracked files in that
+mode, and forwards the command exit code. Otherwise it executes directly in the
+review worktree, including all local files, with no Crabbox tooling required. It
+does not reuse or mutate the producer's task box. `--compact` uses RTK in the selected execution environment
 when available and otherwise runs the raw command with a warning.
 
 ### Merge a clean branch

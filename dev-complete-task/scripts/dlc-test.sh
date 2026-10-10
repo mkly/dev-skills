@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dlc-test.sh — run a check (tests/build/lint) against a
-# review branch inside an isolated Crabbox/Incus box — the same sandbox model
-# dev-implement-task uses for build/test, never the host.
+# review branch in a dedicated host worktree, or a Crabbox lease when
+# CRABBOX_PROVIDER selects a provider.
 #
 #   dlc-test.sh <branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
 #
@@ -30,13 +30,13 @@ usage() {
   cat >&2 <<'EOF'
 Usage: dlc-test.sh <branch> [--compact] [--keep-box] [--no-sync] [--dry-run] -- <cmd...>
 
-  --compact    compact command output with in-box `rtk test`; run unfiltered
-               with a warning when RTK is unavailable in the box
+  --compact    compact command output with `rtk test` in the selected environment;
+               run unfiltered with a warning when RTK is unavailable
   --keep-box   don't stop the box after this run (reuse it for another call)
   --no-sync    skip the worktree upload this run (fast re-run, no local changes)
-  --dry-run    log the crabbox invocation instead of running it
+  --dry-run    log the invocation instead of running it
 
-Runs <cmd...> inside a Crabbox/Incus box checked out at <branch>'s tip. Forwards
+Runs <cmd...> at <branch>'s tip, locally unless CRABBOX_PROVIDER is set. Forwards
 <cmd>'s exit code verbatim. Never edits, merges, or pushes anything.
 Exit: 0 ok, 20 precondition/usage, 30 branch not present locally.
 EOF
@@ -61,7 +61,8 @@ done
 [ -n "$BRANCH" ] || { usage; dlc_die "$DLC_PRECOND" "review branch name required"; }
 [ "${#CMD[@]}" -gt 0 ] || { usage; dlc_die "$DLC_PRECOND" "no command given (expected '<branch> -- <cmd>')"; }
 
-dlc_require task git jq crabbox
+dlc_require task git jq
+if [ -n "$CRABBOX_PROVIDER" ]; then dlc_require crabbox; fi
 dlc_in_git_repo
 git rev-parse --verify --quiet "refs/heads/${BRANCH}" >/dev/null \
   || dlc_die "$DLC_MISSING" "review branch '${BRANCH}' is not present locally"
@@ -107,7 +108,10 @@ ensure_worktree "$wt" "$BRANCH"
 
 # Warm (or reuse) the branch-keyed lease. No task/annotation involved — the
 # slug is deterministic, so a live box is found by id alone.
-if box_alive "$slug"; then
+handle=""
+if [ -z "$CRABBOX_PROVIDER" ]; then
+  dlc_log "local verification selected: $wt"
+elif box_alive "$slug"; then
   handle="$slug"
   dlc_log "reusing live box for ${BRANCH}: $handle"
 else
@@ -147,23 +151,27 @@ if [ "$COMPACT" -eq 1 ]; then
   done
   # The single-quoted program is evaluated by the inner shell, not this one.
   # shellcheck disable=SC2016
-  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then command=$1; shift; exec rtk test "$command"; fi; shift; printf "%s\n" "dev-complete-task: WARN: --compact requested but rtk is unavailable in box; running unfiltered" >&2; exec "$@"' dev-complete-task-compact "$compact_command" "${CMD[@]}")
+  payload=(sh -c 'if command -v rtk >/dev/null 2>&1; then command=$1; shift; exec rtk test "$command"; fi; shift; printf "%s\n" "dev-complete-task: WARN: --compact requested but rtk is unavailable; running unfiltered" >&2; exec "$@"' dev-complete-task-compact "$compact_command" "${CMD[@]}")
 fi
 
-run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")
-[ "$NO_SYNC" -eq 1 ] && run+=(-no-sync)
-run+=(--)
-run+=("${payload[@]}")
+if [ -n "$CRABBOX_PROVIDER" ]; then
+  run=(crabbox run -provider "$CRABBOX_PROVIDER" -id "$handle" -keep -keep-on-failure -label "$label")
+  [ "$NO_SYNC" -eq 1 ] && run+=(-no-sync)
+  run+=(--)
+  run+=("${payload[@]}")
+else
+  run=("${payload[@]}")
+fi
 
 rc=0
 if [ "$DRY" -eq 1 ]; then
   dlc_log "DRY-RUN: (cd $wt && ${run[*]})"
 else
-  dlc_log "run on $handle (upload=$([ "$NO_SYNC" -eq 1 ] && echo skip || echo yes), compact=$([ "$COMPACT" -eq 1 ] && echo requested || echo no)): ${CMD[*]}"
+  dlc_log "run in ${handle:-$wt} (upload=$([ "$NO_SYNC" -eq 1 ] && echo skip || echo yes), compact=$([ "$COMPACT" -eq 1 ] && echo requested || echo no)): ${CMD[*]}"
   ( cd "$wt" && "${run[@]}" ) || rc=$?
 fi
 
-if [ "$KEEP_BOX" -eq 0 ] && [ "$DRY" -eq 0 ]; then
+if [ -n "$handle" ] && [ "$KEEP_BOX" -eq 0 ] && [ "$DRY" -eq 0 ]; then
   crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" >/dev/null 2>&1 \
     || dlc_warn "could not stop box $handle (may already be gone)"
 fi

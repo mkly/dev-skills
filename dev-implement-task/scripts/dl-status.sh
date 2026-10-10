@@ -17,14 +17,15 @@ case "${1:-}" in -h|--help)
   printf 'Usage: dl-status.sh [-h]\n\nRead-only claim + box reconciliation report.\n' >&2; exit 0 ;;
 esac
 
-dl_require task jq crabbox
+dl_require task jq
+if [ -n "$CRABBOX_PROVIDER" ]; then dl_require crabbox; fi
 
 stale_secs="$(dl_dur_to_secs "$DEV_LOOP_STALE")"
 now="$(date -u +%s)"
 fmt_age() { local s="$1"; printf '%dh%02dm' "$(( s/3600 ))" "$(( (s%3600)/60 ))"; }
 
 printf 'dev-implement-task status   owner=%s   provider=%s   stale>=%s\n' \
-  "$DEV_LOOP_OWNER" "$CRABBOX_PROVIDER" "$DEV_LOOP_STALE"
+  "$DEV_LOOP_OWNER" "${CRABBOX_PROVIDER:-local}" "$DEV_LOOP_STALE"
 printf -- '----------------------------------------------------------------\n'
 
 # Referenced boxes: handle -> uuid for every pending task that has one.
@@ -107,55 +108,64 @@ done
 [ "$any_blocked" -eq 1 ] || printf '  (none)\n'
 
 # Live leases from crabbox.
-printf '\nLive leases:\n'
-leases_json="$(crabbox list -provider "$CRABBOX_PROVIDER" -json 2>/dev/null || echo '[]')"
-if ! printf '%s' "$leases_json" | jq -e 'type=="array"' >/dev/null 2>&1; then
-  printf '  (could not list leases for provider %s)\n' "$CRABBOX_PROVIDER"
-  leases_json='[]'
+if [ -n "$CRABBOX_PROVIDER" ]; then
+  printf '\nLive leases:\n'
+  leases_json="$(crabbox list -provider "$CRABBOX_PROVIDER" -json 2>/dev/null || echo '[]')"
+  if ! printf '%s' "$leases_json" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    printf '  (could not list leases for provider %s)\n' "$CRABBOX_PROVIDER"
+    leases_json='[]'
+  fi
+
+  declare -a ORPHANS=()
+  had_lease=0
+  parked_box="$(head -n1 "$(dl_idle_box_file)" 2>/dev/null || true)"
+  while IFS=$'\t' read -r lid lslug llabel; do
+    [ -n "$lid$lslug" ] || continue
+    had_lease=1
+    # Guard the array subscript: a lease can report an empty id (only a slug), and
+    # `${REF_UUID[]}` is a fatal "bad array subscript" under `set -u`. Only index
+    # with a non-empty key, falling back from id to slug.
+    ref=""
+    [ -n "$lid" ] && ref="${REF_UUID[$lid]:-}"
+    if [ -z "$ref" ] && [ -n "$lslug" ]; then ref="${REF_UUID[$lslug]:-}"; fi
+    if [ -n "$ref" ]; then
+      printf '  %-28s  task %s  %s\n' "${lid:-$lslug}" "${ref:0:8}" "${llabel}"
+    elif [ -n "$parked_box" ] && { [ "$lid" = "$parked_box" ] || [ "$lslug" = "$parked_box" ]; }; then
+      printf '  %-28s  PARKED (idle box awaiting next task)  %s\n' "${lid:-$lslug}" "${llabel}"
+    else
+      printf '  %-28s  ORPHAN (no pending task references it)  %s\n' "${lid:-$lslug}" "${llabel}"
+      ORPHANS+=("${lid:-$lslug}")
+    fi
+  done < <(printf '%s' "$leases_json" \
+    | jq -r '.[]?
+        | [ (.labels.lease // .lease // (.id|strings) // .ID // .name // ""),
+            (.labels.slug  // .slug  // .Slug // ""),
+            (.name // .label // .Label // "") ]
+        | @tsv' 2>/dev/null || true)
+  [ "$had_lease" -eq 1 ] || printf '  (none)\n'
+
+  # Dangling box refs: a pending task points at a lease that is not live.
+  mapfile -t live_ids < <(printf '%s' "$leases_json" \
+    | jq -r '.[]? | (.labels.lease // .lease // (.id|strings) // .ID // .name // ""), (.labels.slug // .slug // .Slug // "")' 2>/dev/null | sort -u || true)
+  is_live() { local h="$1" x; for x in ${live_ids[@]+"${live_ids[@]}"}; do [ "$x" = "$h" ] && return 0; done; return 1; }
+
+  printf '\nDangling box refs:\n'
+  any_dangle=0
+  for h in "${!REF_UUID[@]}"; do
+    if ! is_live "$h"; then
+      any_dangle=1
+      printf '  task %s references box %s which is not live (annotation is stale)\n' "${REF_UUID[$h]:0:8}" "$h"
+    fi
+  done
+  [ "$any_dangle" -eq 1 ] || printf '  (none)\n'
+else
+  ORPHANS=()
+  printf '\nLive leases: skipped (local execution)\n'
+  for h in "${!REF_UUID[@]}"; do
+    printf '  task %s records remote box %s (unchecked; select its provider to inspect)\n' \
+      "${REF_UUID[$h]:0:8}" "$h"
+  done
 fi
-
-declare -a ORPHANS=()
-had_lease=0
-parked_box="$(head -n1 "$(dl_idle_box_file)" 2>/dev/null || true)"
-while IFS=$'\t' read -r lid lslug llabel; do
-  [ -n "$lid$lslug" ] || continue
-  had_lease=1
-  # Guard the array subscript: a lease can report an empty id (only a slug), and
-  # `${REF_UUID[]}` is a fatal "bad array subscript" under `set -u`. Only index
-  # with a non-empty key, falling back from id to slug.
-  ref=""
-  [ -n "$lid" ] && ref="${REF_UUID[$lid]:-}"
-  if [ -z "$ref" ] && [ -n "$lslug" ]; then ref="${REF_UUID[$lslug]:-}"; fi
-  if [ -n "$ref" ]; then
-    printf '  %-28s  task %s  %s\n' "${lid:-$lslug}" "${ref:0:8}" "${llabel}"
-  elif [ -n "$parked_box" ] && { [ "$lid" = "$parked_box" ] || [ "$lslug" = "$parked_box" ]; }; then
-    printf '  %-28s  PARKED (idle box awaiting next task)  %s\n' "${lid:-$lslug}" "${llabel}"
-  else
-    printf '  %-28s  ORPHAN (no pending task references it)  %s\n' "${lid:-$lslug}" "${llabel}"
-    ORPHANS+=("${lid:-$lslug}")
-  fi
-done < <(printf '%s' "$leases_json" \
-  | jq -r '.[]?
-      | [ (.labels.lease // .lease // (.id|strings) // .ID // .name // ""),
-          (.labels.slug  // .slug  // .Slug // ""),
-          (.name // .label // .Label // "") ]
-      | @tsv' 2>/dev/null || true)
-[ "$had_lease" -eq 1 ] || printf '  (none)\n'
-
-# Dangling box refs: a pending task points at a lease that is not live.
-mapfile -t live_ids < <(printf '%s' "$leases_json" \
-  | jq -r '.[]? | (.labels.lease // .lease // (.id|strings) // .ID // .name // ""), (.labels.slug // .slug // .Slug // "")' 2>/dev/null | sort -u || true)
-is_live() { local h="$1" x; for x in ${live_ids[@]+"${live_ids[@]}"}; do [ "$x" = "$h" ] && return 0; done; return 1; }
-
-printf '\nDangling box refs:\n'
-any_dangle=0
-for h in "${!REF_UUID[@]}"; do
-  if ! is_live "$h"; then
-    any_dangle=1
-    printf '  task %s references box %s which is not live (annotation is stale)\n' "${REF_UUID[$h]:0:8}" "$h"
-  fi
-done
-[ "$any_dangle" -eq 1 ] || printf '  (none)\n'
 
 # Per-task git worktrees for THIS repo (under DEV_LOOP_WORKTREE_DIR). Flags
 # ORPHAN (registered but no pending task references it — left by a completed or

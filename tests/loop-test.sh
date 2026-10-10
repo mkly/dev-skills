@@ -31,12 +31,21 @@ assert_error '--standard, --small, --large, and --plan are mutually exclusive' \
   --agent codex --model gpt-test --standard --plan
 assert_error 'unknown argument: --no-small' --agent codex --no-small
 assert_error '--effort is not supported by agent qwen' --agent qwen --effort high
+assert_error '--effort is not supported by agent devin' --agent devin --effort high
+assert_error '--otel-endpoint requires a value' --agent codex --otel-endpoint
+assert_error '--otel-endpoint requires a value' --agent codex --otel-endpoint ''
+assert_error '--otel-endpoint requires an HTTP(S) base URL' --agent codex --otel-endpoint 'grpc://localhost:4317'
+assert_error '--otel-endpoint requires an HTTP(S) base URL' --agent codex --otel-endpoint 'http://host/"bad'
+assert_error '--otel-endpoint requires a base URL' --agent codex --otel-endpoint 'http://localhost:4318/v1/logs'
+for selected_agent in agy devin; do
+  assert_error "--otel-endpoint is not supported by agent $selected_agent" --agent "$selected_agent" --otel-endpoint http://localhost:4318
+done
 
 help="$($ROOT/loop --help)"
 printf '%s\n' "$help" | grep -Fq -- '[--model <model>] [--effort <effort>]' || \
   fail 'help omits model and effort options'
-printf '%s\n' "$help" | grep -Fq -- '<codex|claude|agy|qwen>' || \
-  fail 'help omits the qwen agent'
+printf '%s\n' "$help" | grep -Fq -- '<codex|claude|agy|qwen|devin|copilot>' || \
+  fail 'help omits a supported agent'
 
 mkdir "$TMP/bin"
 cat >"$TMP/bin/task" <<'EOF'
@@ -50,12 +59,29 @@ EOF
 cat >"$TMP/bin/capture-agent" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$CAPTURE"
+for name in OTEL_RESOURCE_ATTRIBUTES OTEL_SDK_DISABLED OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_LOGS_ENDPOINT OTEL_EXPORTER_OTLP_PROTOCOL OTEL_LOGS_EXPORTER CLAUDE_CODE_ENABLE_TELEMETRY QWEN_TELEMETRY_ENABLED COPILOT_OTEL_ENABLED COPILOT_OTEL_EXPORTER_TYPE COPILOT_OTEL_FILE_EXPORTER_PATH QWEN_TELEMETRY_OTLP_LOGS_ENDPOINT; do
+  printf '%s=%s\n' "$name" "${!name-}" >>"$CAPTURE.env"
+done
 EOF
+cat >"$TMP/bin/git" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  'rev-parse --is-inside-work-tree') echo true ;;
+  'remote get-url origin') echo "${TEST_ORIGIN:-git@github.com:Example/Project-A.git}" ;;
+  'rev-parse --path-format=absolute --git-common-dir') echo "$KNOWLEDGE_TEST_ROOT/.git" ;;
+  'worktree list --porcelain -z') printf 'worktree %s\0HEAD fixture\0branch refs/heads/main\0\0' "$KNOWLEDGE_TEST_ROOT" ;;
+  *) exit 1 ;;
+esac
+EOF
+export KNOWLEDGE_TEST_ROOT="$TMP/project"
+mkdir -p "$KNOWLEDGE_TEST_ROOT/.git"
 chmod +x "$TMP/bin/"*
 ln -s capture-agent "$TMP/bin/codex"
 ln -s capture-agent "$TMP/bin/claude"
 ln -s capture-agent "$TMP/bin/agy"
 ln -s capture-agent "$TMP/bin/qwen"
+ln -s capture-agent "$TMP/bin/devin"
+ln -s capture-agent "$TMP/bin/copilot"
 
 run_and_capture() {
   selected_agent="$1"
@@ -70,6 +96,54 @@ grep -Fxq -- 'gpt-test' "$TMP/codex.args" || fail 'codex model value not forward
 grep -Fxq -- '--config' "$TMP/codex.args" || fail 'codex effort config not forwarded'
 grep -Fxq -- 'model_reasoning_effort=high' "$TMP/codex.args" || \
   fail 'codex effort value not forwarded'
+
+# A parent shell configured for a different project must not enable export or
+# override the endpoint. Capture the actual launch environment without an LLM.
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://old-project:4318
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://old-project:4318/v1/logs
+export QWEN_TELEMETRY_OTLP_LOGS_ENDPOINT=http://old-project:4318/v1/logs
+export COPILOT_OTEL_FILE_EXPORTER_PATH=/tmp/old-project-otel
+export CLAUDE_CODE_ENABLE_TELEMETRY=1 QWEN_TELEMETRY_ENABLED=true COPILOT_OTEL_ENABLED=true
+for selected_agent in codex claude qwen copilot agy devin; do
+  rm -f "$TMP/$selected_agent.args.env"
+  run_and_capture "$selected_agent"
+  grep -Fxq 'OTEL_SDK_DISABLED=true' "$TMP/$selected_agent.args.env" || fail "$selected_agent default exports enabled"
+  grep -Fxq 'OTEL_EXPORTER_OTLP_ENDPOINT=' "$TMP/$selected_agent.args.env" || fail "$selected_agent inherited endpoint"
+  grep -Fxq 'CLAUDE_CODE_ENABLE_TELEMETRY=0' "$TMP/$selected_agent.args.env" || fail 'claude telemetry opt-out missing'
+  grep -Fxq 'QWEN_TELEMETRY_ENABLED=false' "$TMP/$selected_agent.args.env" || fail 'qwen telemetry opt-out missing'
+  grep -Fxq 'COPILOT_OTEL_ENABLED=false' "$TMP/$selected_agent.args.env" || fail 'copilot telemetry opt-out missing'
+  grep -Fxq 'COPILOT_OTEL_FILE_EXPORTER_PATH=' "$TMP/$selected_agent.args.env" || fail "$selected_agent inherited file export"
+done
+for exporter in exporter trace_exporter metrics_exporter; do
+  grep -Fxq "otel.$exporter=\"none\"" "$TMP/codex.args" || fail "codex $exporter not disabled"
+done
+grep -Fxq -- '--no-telemetry' "$TMP/qwen.args" || fail 'qwen not explicitly disabled'
+for selected_agent in codex claude qwen copilot; do
+  rm -f "$TMP/$selected_agent.args.env"
+  export OTEL_RESOURCE_ATTRIBUTES=team=platform,service.namespace=wrong,dev_loop.project=wrong,dev_loop.repository=wrong
+  run_and_capture "$selected_agent" --otel-endpoint https://collector.example/project-a/
+  grep -Fxq 'OTEL_SDK_DISABLED=false' "$TMP/$selected_agent.args.env" || fail "$selected_agent export disabled"
+  grep -Fxq 'OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example/project-a' "$TMP/$selected_agent.args.env" || fail "$selected_agent wrong endpoint"
+  grep -Fxq 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://collector.example/project-a/v1/logs' "$TMP/$selected_agent.args.env" || fail "$selected_agent inherited signal endpoint"
+  grep -Fxq 'OTEL_RESOURCE_ATTRIBUTES=team=platform,service.namespace=project-a,dev_loop.project=project-a,dev_loop.repository=github.com/example/project-a' "$TMP/$selected_agent.args.env" || fail "$selected_agent incorrect project identity"
+done
+grep -Fxq 'otel.exporter={otlp-http={endpoint="https://collector.example/project-a/v1/logs",protocol="binary"}}' "$TMP/codex.args" || fail 'codex log exporter incorrect'
+grep -Fxq 'COPILOT_OTEL_EXPORTER_TYPE=otlp-http' "$TMP/copilot.args.env" || fail 'copilot file exporter not overridden'
+grep -Fxq -- '--telemetry-outfile' "$TMP/qwen.args" || fail 'qwen file setting not overridden'
+unset OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_LOGS_ENDPOINT QWEN_TELEMETRY_OTLP_LOGS_ENDPOINT COPILOT_OTEL_FILE_EXPORTER_PATH
+unset CLAUDE_CODE_ENABLE_TELEMETRY QWEN_TELEMETRY_ENABLED COPILOT_OTEL_ENABLED
+unset OTEL_RESOURCE_ATTRIBUTES
+for TEST_ORIGIN in https://github.com/Other/Project-B.git/ ssh://git@github.com/Other/Project-B.git; do
+  export TEST_ORIGIN
+  rm -f "$TMP/claude.args.env"
+  run_and_capture claude --otel-endpoint http://localhost:4318
+  grep -Fxq 'OTEL_RESOURCE_ATTRIBUTES=service.namespace=project-b,dev_loop.project=project-b,dev_loop.repository=github.com/other/project-b' "$TMP/claude.args.env" || fail 'project identity differs by origin format'
+done
+unset TEST_ORIGIN
+PATH="$TMP/bin:$PATH" TEST_ORIGIN=https://gitlab.com/Other/Project.git \
+  assert_error 'origin must be a GitHub repository URL' --agent claude --otel-endpoint http://localhost:4318
+run_and_capture claude --otel-endpoint 'http://[::1]:4318'
+grep -Fxq 'OTEL_EXPORTER_OTLP_ENDPOINT=http://[::1]:4318' "$TMP/claude.args.env" || fail 'IPv6 collector rejected'
 
 for selected_agent in claude agy; do
   run_and_capture "$selected_agent" --model model-test --effort medium
@@ -95,6 +169,31 @@ grep -Fxq -- '--prompt-interactive' "$TMP/qwen.args" || \
 if grep -Fxq -- '--effort' "$TMP/qwen.args"; then
   fail 'qwen was handed an effort flag it cannot honor'
 fi
+
+run_and_capture devin --model devin-test
+grep -Fxq -- '--model' "$TMP/devin.args" || fail 'devin model flag not forwarded'
+grep -Fxq -- 'devin-test' "$TMP/devin.args" || fail 'devin model value not forwarded'
+grep -Fxq -- '--permission-mode' "$TMP/devin.args" || \
+  fail 'devin permission mode not configured'
+grep -Fxq -- 'dangerous' "$TMP/devin.args" || \
+  fail 'devin was not launched unattended'
+grep -Fxq -- '--respect-workspace-trust' "$TMP/devin.args" || \
+  fail 'devin workspace trust was not configured for print mode'
+grep -Fxq -- 'false' "$TMP/devin.args" || \
+  fail 'devin print mode can still block on workspace trust'
+grep -Fxq -- '-p' "$TMP/devin.args" || fail 'devin was not launched in print mode'
+
+run_and_capture copilot --model copilot-test --effort high
+grep -Fxq -- '--model' "$TMP/copilot.args" || fail 'copilot model flag not forwarded'
+grep -Fxq -- 'copilot-test' "$TMP/copilot.args" || fail 'copilot model value not forwarded'
+grep -Fxq -- '--effort' "$TMP/copilot.args" || fail 'copilot effort flag not forwarded'
+grep -Fxq -- 'high' "$TMP/copilot.args" || fail 'copilot effort value not forwarded'
+grep -Fxq -- '--allow-all' "$TMP/copilot.args" || \
+  fail 'copilot was not launched unattended'
+grep -Fxq -- '--no-ask-user' "$TMP/copilot.args" || \
+  fail 'copilot can still block on an agent question'
+grep -Fxq -- '-p' "$TMP/copilot.args" || \
+  fail 'copilot was not launched in prompt mode'
 
 # A task another worker holds mid-implementation is neither claimable (it is
 # +ACTIVE and assigned) nor review-ready (no branch=/summary: yet). The default

@@ -78,7 +78,7 @@ case "$OUTCOME" in
   *) usage; dl_die "$DL_PRECOND" "invalid --outcome '$OUTCOME' (expected merged, stacked, superseded, or decomposed)" ;;
 esac
 
-dl_require task jq crabbox git
+dl_require task jq git
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 
 status="$(dl_task_field "$UUID" '.status // ""')"
@@ -172,6 +172,10 @@ case "$OUTCOME" in
     ;;
 esac
 
+# Validate any recorded remote route before removing implementation resources.
+handle="$(dl_anno_get "$UUID" box)"
+if [ -n "$handle" ]; then dl_use_box_provider "$UUID"; fi
+
 # Remove the per-task worktree and its scratch branch (best-effort). The
 # review/<slug> branch is shared in the repo and is KEPT — only the throwaway
 # worktree + dl/<slug> pointer go away, freeing the tree for reuse and keeping
@@ -225,7 +229,7 @@ if [ "$KEEP_WT" -ne 1 ]; then
 fi
 
 # Only expose the lease for reuse after the unmerged-worktree guard and cleanup
-# have succeeded. Crabbox's idle timeout reaps it if the loop ends here.
+# have succeeded. Automatic expiry is provider-dependent.
 handle="$(dl_anno_get "$UUID" box)"
 holder=""
 [ -z "$handle" ] || holder="$(dl_box_holder "$handle" "$UUID")"
@@ -246,7 +250,7 @@ elif [ -n "$handle" ]; then
       dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
     else
       dl_idle_box_park "$handle"
-      dl_log "parked box $handle for the next task (idle timeout will reap it)"
+      dl_log "parked box $handle for the next task; stop it explicitly when no longer needed"
     fi
   else
     dl_warn "could not park box $handle (it is no longer live)"

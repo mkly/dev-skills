@@ -16,7 +16,8 @@ usage() {
 Usage: dl-setup.sh [--dry-run] [-h|--help]
 
 Idempotent setup: defines the `assignee` UDA, verifies tooling, and runs
-`crabbox doctor` for the active provider (CRABBOX_PROVIDER, default incus).
+`crabbox doctor` only when CRABBOX_PROVIDER selects a provider. Otherwise checks
+run in host worktrees and no Crabbox or provider CLI is required.
 Safe to re-run. Exit 20 on any unmet precondition.
 EOF
 }
@@ -30,9 +31,9 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# 1. Required tooling. incus is only needed when it is the active provider.
-dl_require git jq flock task crabbox
-[ "$CRABBOX_PROVIDER" = "incus" ] && dl_require incus
+# 1. Provider tooling is optional; Crabbox owns provider-specific diagnostics.
+dl_require git jq flock task
+if [ -n "$CRABBOX_PROVIDER" ]; then dl_require crabbox; fi
 
 # 2. assignee UDA (check-before-write; back up taskrc only when changing it).
 taskrc_candidates() {
@@ -101,7 +102,9 @@ else
 fi
 
 # 3. Provider readiness gate.
-if [ -n "$DL_DRY_RUN" ]; then
+if [ -z "$CRABBOX_PROVIDER" ]; then
+  dl_log "local execution selected; skipping Crabbox provider setup"
+elif [ -n "$DL_DRY_RUN" ]; then
   dl_log "DRY-RUN: skipping 'crabbox doctor -provider $CRABBOX_PROVIDER'"
 elif crabbox doctor -provider "$CRABBOX_PROVIDER" >&2; then
   dl_log "crabbox doctor passed for provider '$CRABBOX_PROVIDER'"

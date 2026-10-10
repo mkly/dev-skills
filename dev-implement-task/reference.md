@@ -35,10 +35,10 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 | `DEV_LOOP_OWNER`      | `loop`-generated per worker, else state file owner, else `$USER@$(hostname -s)` | Claim owner / lock identity. Must be **distinct per concurrent worker**: two workers sharing an owner are indistinguishable to `dl-claim.sh`. `loop` generates one per worker process; the state file (`~/.config/dev-loop/owner`) is a single-agent default and is shared by every agent on the host. For manual override, export a stable literal for the session; never use a dynamically re-expanded `$$-derived` value which changes per command and breaks locks. |
 | `DEV_LOOP_ROUTE`      | unset (→ the untagged standard queue)     | Routing queue (`standard`, `small`, `large`, `plan`) exported by `loop` from its queue flag. `dl-claim.sh` applies it as the default worker queue so a worker cannot claim outside the queue its poll counted; an explicit `--standard`/`--small`/`--large`/`--plan` overrides it, and any other value is a precondition error. |
 | `AGENT_PID`           | unset                                     | Calling agent's PID, exported by `loop`. Used as the claim nonce so an agent can re-claim its own task while a concurrent agent sharing its owner is still rejected. |
-| `CRABBOX_PROVIDER`    | `incus`                                   | Crabbox provider. Passed to **every** crabbox call (bare `crabbox list` defaults elsewhere and fails). |
+| `CRABBOX_PROVIDER`    | unset | Opt into Crabbox with this provider. Unset or empty means local worktree execution. Existing leases retain `box-provider=`. |
+| `DEV_LOOP_BOX_SCOPE` | unset | Optional nonsecret account/endpoint namespace for parked-box reuse; combined with repository and provider. |
 | `DEV_LOOP_TTL`        | `2h`                                      | Lease TTL passed to `crabbox warmup -ttl`. |
 | `DEV_LOOP_STALE`      | `4h`                                      | Age past which `dl-status.sh` flags an active claim `[STALE]`. (Stealing still requires an explicit `--steal-after`.) |
-| `CRABBOX_INCUS_*`     | (unset → crabbox defaults)                | Incus overrides read by crabbox itself on **every** subcommand: `CRABBOX_INCUS_IMAGE`, `CRABBOX_INCUS_REMOTE`, `CRABBOX_INCUS_INSTANCE_TYPE`, `CRABBOX_INCUS_PROFILE`, ... `CRABBOX_INCUS_REMOTE` also namespaces the parked-box slot so local and remote pools never collide. |
 | `DEV_LOOP_STATE_DIR`  | `${XDG_STATE_HOME:-$HOME/.local/state}/dev-loop` | Holds the `flock` lockfiles (`locks/`). |
 | `DEV_LOOP_WORKTREE_DIR` | `${DEV_LOOP_STATE_DIR}/worktrees`        | Parent dir for per-task git worktrees. Each task gets `<dir>/<repo-key>/<slug>` (a worktree on scratch branch `dl/<slug>`). Kept OUTSIDE the repo so worktrees never appear as untracked files. The `<repo-key>` is derived from `git rev-parse --git-common-dir`, so it is stable across a repo's own worktrees. |
 | `DEV_LOOP_TITLE`      | `auto`                                     | On a successful claim, update the worker's X11 window title to `[short-uuid] first five description words`. Set to `off`, `0`, `false`, or `no` to disable. |
@@ -47,18 +47,17 @@ Constants live in `dl-common.sh` as `DL_OK` / `DL_LOST` / `DL_PRECOND` /
 
 Durations accept `90s`, `30m`, `2h`, `1d`, `2h30m`, or a bare integer (seconds).
 
-Note: Incus flags (`-incus-image`/`-incus-instance-type`/`-incus-remote`) are
-**warmup-only**. A warmed lease already encodes its config, so `run`/`status`/
-`stop` pass only `-provider`/`-id`. Setting `INCUS_*` after a box is warmed has
-no effect until the next warmup.
+Provider-specific configuration and authentication are read by Crabbox. A selected
+provider failure is an environmental blocker; helpers never switch to local
+execution after a failed remote operation.
 
 ## Scripts at a glance
 
 | Script              | Args                                              | stdout            | Notes |
 |---------------------|---------------------------------------------------|-------------------|-------|
-| `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling + `crabbox doctor` gate. Idempotent. |
+| `dl-setup.sh`       | `[--dry-run]`                                      | —                 | UDA + tooling; `crabbox doctor` only with a selected provider. Idempotent. |
 | `dl-claim.sh`       | `[<uuid>] [--standard\|--small\|--large\|--plan] [--goal <slug>] [--loop-id <uuid>] [--loop-round <n>] [--steal-after <dur>] [--dry-run]` | claimed uuid | GitHub-origin identity/ready gate + host-wide flock + verified owner write. Default is untagged; flags select their worker queue, else `DEV_LOOP_ROUTE`. |
-| `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle        | Create-or-reuse the per-task worktree (`dl/<slug>`) AND warm, reuse, or adopt the repo's parked lease; records `worktree=`,`base=`,`box=`. First-run base is `--base`, else `input:`, else HEAD. |
+| `dl-box.sh`         | `<uuid> [--base <ref>] [--force] [--dry-run]`       | box handle or local path | Create-or-reuse the per-task worktree (`dl/<slug>`) and optionally warm, reuse, or adopt a Crabbox lease; records `worktree=`,`base=`,`executor=`, and remote `box=`/`box-provider=`. First-run base is `--base`, else `input:`, else HEAD. |
 | `dl-run.sh`         | `<uuid> [--force] [--compact] [--no-sync\|--resync] [crabbox flags] -- <cmd>` | (command output) | cd's into the task worktree and syncs it up every run; `--compact` uses in-box RTK with raw fallback; `--no-sync` skips. Forwards cmd exit code. |
 | `dl-merge-back.sh`  | `<uuid> [<branch>] [--force] [--dry-run]`           | branch name       | Local-only: snapshots the task worktree's tree → re-parents onto base (`commit-tree -p base`) → new branch. Exact re-runs of the same branch are no-ops. |
 | `dl-release.sh`     | `<uuid> [--blocked-by <task-ref>]... [--stop-box] [--force] [--dry-run]` | —                 | Abandon claim; park the live lease for reuse (or stop with `--stop-box`), clear `assignee`; task stays pending and its worktree remains. `--blocked-by` also records a Taskwarrior dependency so the task leaves `+READY` instead of being handed back to the next worker. |
@@ -180,7 +179,7 @@ Only an active claim whose `start` is at least `<dur>` old is reclaimable; the
 takeover is recorded as an annotation (`stolen from <owner> after <n>s idle`).
 Without `--steal-after`, an owned task always returns `10`.
 
-### Work in the box & the sync model
+### Worktree execution and optional Crabbox sync
 
 **The task's own git worktree is the single source of truth.** `dl-box.sh`
 creates one worktree per task — a separate working tree on scratch branch
@@ -196,7 +195,14 @@ across worktrees, so the `review/<slug>` branch a task produces is still visible
 from the main checkout.) `dl-run.sh` and `dl-merge-back.sh` cd into the worktree
 automatically; you do not pass the path.
 
-`dl-box.sh` blocks until Crabbox has finished warming a new lease. Keep the
+Without `CRABBOX_PROVIDER`, `dl-box.sh` prepares the local worktree, records
+`executor=local`, and prints its path. `dl-run.sh` runs commands there directly,
+including untracked files, forwarding arguments and exit codes. `--compact` uses
+local RTK with raw fallback. Sync flags have no effect locally; other Crabbox
+flags are rejected. Setup, release, completion, and status need no Crabbox binary
+for local tasks.
+
+With a provider selected, `dl-box.sh` blocks until Crabbox has finished warming a new lease. Keep the
 command in a persistent session until it exits; `warming box` is only a progress
 message. When an execution tool yields a still-running session/process ID, poll
 that same session until it returns an actual exit code; quiet polls are normal.
@@ -212,8 +218,9 @@ After `dev-complete-task/scripts/dlc-done.sh` or `dl-release.sh`, a still-live
 lease is parked for this repository instead of being stopped. The next
 `dl-box.sh` atomically claims it,
 reclaims it for the new task's worktree, and performs a sync-only run. This
-keeps the instance and its build caches warm across sequential tasks; Crabbox's
-30-minute idle timeout cleans it up when the loop ends. Pass `--stop-box` when
+keeps the instance and its build caches warm across sequential tasks. Automatic
+expiry is provider-dependent; recorded TTL is not proof of deletion. Stop parked
+leases explicitly before finishing a goal. Pass `--stop-box` when
 a pristine next box or immediate cleanup matters. A reused box retains the
 previous task's untracked build state.
 
@@ -405,8 +412,8 @@ task "$uuid" export | jq -r '.[0].description'
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `dl-setup.sh` exits `20` on doctor | Run `crabbox doctor -provider incus` and fix what it reports (Incus not initialized, no remote, etc.). |
-| `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare crabbox calls default to another provider. |
+| `dl-setup.sh` exits `20` on doctor | Run `crabbox doctor -provider "$CRABBOX_PROVIDER"` and fix the selected provider prerequisites. |
+| `crabbox list` fails / wrong provider | Always pass `-provider`. The skill scripts do; bare Crabbox calls may select repository or user configuration. |
 | Claim returns `10` immediately | Task is owned by another owner. Pick another, or `--steal-after <dur>` if it is genuinely stale. |
 | Workers keep claiming the same task and releasing it unworked | The task is blocked by another task and nobody recorded it, so it stays `+READY` every round. Release it with `dl-release.sh <uuid> --blocked-by <blocker-uuid>`; read its `blocked-by=` annotations to see whether an earlier worker already identified the blocker. |
 | A task's title was replaced by a bare `assignee:` / `plan:` / `state:Blocked` string | A `task modify` was called with an argument Taskwarrior did not recognize as an attribute, so it became description text and exited `0`. See "Never call `task modify` with a UDA directly" above. The old title is gone from Taskwarrior; recover it from the task's own annotations, the branch/box name, or `dl-status.sh` output. |

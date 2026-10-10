@@ -60,7 +60,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$UUID" ] || { usage; dl_die "$DL_PRECOND" "task uuid required"; }
 
-dl_require task jq crabbox
+dl_require task jq
 dl_task_exists "$UUID" || dl_die "$DL_PRECOND" "no such task: $UUID"
 UUID="$(dl_task_field "$UUID" '.uuid // ""')"
 [ -n "$UUID" ] || dl_die "$DL_PRECOND" "could not resolve task uuid"
@@ -163,6 +163,7 @@ fi
 # Park the box by default so the next task avoids a fresh warmup.
 handle="$(dl_anno_get "$UUID" box)"
 if [ -n "$handle" ]; then
+  dl_use_box_provider "$UUID"
   if [ "$STOP_BOX" -eq 1 ]; then
     dl_log "stopping box $handle"
     dl_do crabbox stop -provider "$CRABBOX_PROVIDER" -id "$handle" || dl_warn "could not stop box $handle (may already be gone)"
@@ -179,7 +180,7 @@ if [ -n "$handle" ]; then
       # task keeps no claim on a box it just parked; a re-claim warms fresh.
       dl_idle_box_park "$handle"
       dl_anno_set "$UUID" box ""
-      dl_log "parked box $handle for the next task (idle timeout will reap it)"
+      dl_log "parked box $handle for the next task; stop it explicitly when no longer needed"
     fi
   else
     dl_warn "could not park box $handle (it is no longer live)"

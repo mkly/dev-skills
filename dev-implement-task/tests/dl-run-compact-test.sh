@@ -52,6 +52,7 @@ export MOCK_UUID=12345678-1234-1234-1234-123456789abc
 export MOCK_WORKTREE="$TMP/worktree"
 export MOCK_RTK_MARKER="$TMP/rtk.marker"
 export DEV_LOOP_OWNER=compact-test
+export CRABBOX_PROVIDER=fixture
 
 cat >"$TMP/expected.args" <<'EOF'
 <normal>
@@ -91,7 +92,7 @@ set -e
 [ "$fallback_rc" -eq 7 ] || fail "fallback command exited $fallback_rc, expected 7"
 [ "$(<"$TMP/fallback.out")" = '<raw fallback>' ] || fail "fallback changed command arguments"
 [ ! -e "$TMP/rtk.marker" ] || fail "fallback unexpectedly invoked rtk"
-grep -Fq -- '--compact requested but rtk is unavailable in box; running unfiltered' "$TMP/fallback.err" \
+grep -Fq -- '--compact requested but rtk is unavailable; running unfiltered' "$TMP/fallback.err" \
   || fail "fallback warning was not emitted"
 
 set +e

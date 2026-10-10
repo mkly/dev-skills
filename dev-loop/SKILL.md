@@ -13,7 +13,9 @@ directly and consult `--help` only when an argument is unclear.
 Let `LOOP_SKILL` be this skill's absolute directory and resolve
 `CREATE_SKILL`, `IMPLEMENT_SKILL`, `COMPLETE_SKILL`, and `BOARD_SKILL` as its
 siblings. Keep
-the target Git repository as the current checkout. Never push, overwrite
+the target Git repository as the current checkout. Execution defaults to the
+host worktree; set `CRABBOX_PROVIDER` to select Crabbox. Provider failures never
+trigger a local fallback. Never push, overwrite
 unrelated changes, force-delete unmerged branches, or bypass helper checks.
 
 Treat `AGENT_PID` and `AGENT_NOTIFY` as controller-owned lifecycle values.
@@ -143,7 +145,8 @@ limit, preserve pending tasks and branches and request authorization to extend.
 Declare success only when the exact loop has no pending/active task, unmerged
 review branch, unresolved verdict, claim, worktree, or lease, and the integrated
 checkout demonstrates the original goal acceptance. Use `dl-status.sh` for the
-final resource check.
+final resource check; explicitly stop parked remote leases before declaring success.
+Recorded TTL alone does not guarantee provider deletion.
 
 Report repository/goal identity, rounds, task outcomes, merged branches, checks,
 goal evidence, and integration HEAD. Then end the run:

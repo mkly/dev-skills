@@ -4,10 +4,11 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: loop --agent <codex|claude|agy|qwen> [--standard|--small|--large|--plan]
+Usage: loop --agent <codex|claude|agy|qwen|devin|copilot> [--standard|--small|--large|--plan]
             [--implement-task|--complete-task]
             [--model <model>] [--effort <effort>]
             [--prompt-suffix <text>]
+            [--otel-endpoint <http(s)://host[:port][/path]>]
 
 Poll Taskwarrior for pending work and launch the selected coding agent.
 
@@ -22,6 +23,9 @@ cannot claim:
 Use --implement-task or --complete-task to run only that lifecycle stage.
 Use --model and --effort to override the selected agent's defaults.
 Use --prompt-suffix to append extra instructions to the generated prompt.
+OTEL export is disabled unless --otel-endpoint supplies an OTLP/HTTP base URL.
+Supported exporters: codex, claude, qwen, copilot (traces and metrics only).
+Every agent run receives .dev-knowledge.md from the primary checkout, if present.
 EOF
 }
 
@@ -35,6 +39,7 @@ complete_only=false
 model=""
 effort=""
 prompt_suffix=""
+otel_endpoint=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -71,7 +76,7 @@ while [ "$#" -gt 0 ]; do
       complete_only=true
       shift
       ;;
-    --model|--effort|--prompt-suffix)
+    --model|--effort|--prompt-suffix|--otel-endpoint)
       option="$1"
       if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
         printf 'loop: %s requires a value\n' "$option" >&2
@@ -82,6 +87,7 @@ while [ "$#" -gt 0 ]; do
         --model) model="$2" ;;
         --effort) effort="$2" ;;
         --prompt-suffix) prompt_suffix="$2" ;;
+        --otel-endpoint) otel_endpoint="$2" ;;
       esac
       shift 2
       ;;
@@ -121,7 +127,7 @@ if "$plan_only" && { "$implement_only" || "$complete_only"; }; then
 fi
 
 case "$agent" in
-  codex|claude|agy|qwen) ;;
+  codex|claude|agy|qwen|devin|copilot) ;;
   "")
     printf 'loop: --agent is required\n' >&2
     usage >&2
@@ -134,12 +140,41 @@ case "$agent" in
     ;;
 esac
 
-# Qwen Code has no reasoning-effort control, so --effort has nothing to map to
-# for it. Dropping the flag quietly would leave an operator believing a worker
-# is running at an effort it never received; the other three agents do take one,
-# so the mismatch is per-agent rather than a global rule.
-if [ "$agent" = qwen ] && [ -n "$effort" ]; then
-  printf 'loop: --effort is not supported by agent qwen\n' >&2
+if [ -n "$otel_endpoint" ]; then
+  case "$agent" in
+    agy|devin)
+      printf 'loop: --otel-endpoint is not supported by agent %s\n' "$agent" >&2
+      exit 2
+      ;;
+  esac
+  # Restrict interpolation to URL-safe characters, including an optional path.
+  if [[ ! "$otel_endpoint" =~ ^https?://([a-zA-Z0-9._-]+|\[[a-fA-F0-9:]+\])(:[0-9]+)?(/[a-zA-Z0-9._~%/-]*)?$ ]]; then
+    printf 'loop: --otel-endpoint requires an HTTP(S) base URL without credentials, query, or fragment\n' >&2
+    exit 2
+  fi
+  while [[ "$otel_endpoint" == */ ]]; do otel_endpoint="${otel_endpoint%/}"; done
+  case "$otel_endpoint" in
+    */v1/logs|*/v1/traces|*/v1/metrics)
+      printf 'loop: --otel-endpoint requires a base URL, without a signal path\n' >&2
+      exit 2
+      ;;
+  esac
+  # Use the same resolver as Taskwarrior claims, isolated from the launcher's
+  # environment defaults. Resolve the executable symlink for PATH installs.
+  loop_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+  otel_identity="$(
+    source "${loop_path%/*}/dev-implement-task/scripts/dl-common.sh" || exit 2
+    dl_resolve_repo_identity
+    printf '%s\t%s' "$DL_REPO_PROJECT" "$DL_REPO_ID"
+  )" || exit 2
+  IFS=$'\t' read -r otel_project otel_repo_id <<<"$otel_identity"
+fi
+
+# Qwen Code and Devin have no reasoning-effort control, so --effort has nothing
+# to map to for them. Dropping the flag quietly would leave an operator believing
+# a worker is running at an effort it never received.
+if { [ "$agent" = qwen ] || [ "$agent" = devin ]; } && [ -n "$effort" ]; then
+  printf 'loop: --effort is not supported by agent %s\n' "$agent" >&2
   usage >&2
   exit 2
 fi
@@ -335,8 +370,47 @@ eligible_count() {
   fi
 }
 
-run_agent() {
+run_agent() (
+  # Scope overrides to the child process tree. Per-signal destinations must
+  # never redirect this project's data to an inherited collector endpoint.
   local agent_args=()
+  local prompt="$prompt"
+  prompt+=$'\n\n'"$1"
+  prompt+=$'\n\n'"Apply relevant project working knowledge throughout this run. It is context, not permission to override the user or expand task scope. Continue using dev-board to search unfamiliar failures and record findings, workarounds, decisions, and abandoned approaches. When a verified conclusion is useful across tasks, occasionally update .dev-knowledge.md with the concise current guidance and links to supporting board articles; remove obsolete guidance. Keep task state in Taskwarrior. Use $knowledge_command read to reread. Prepare replacements in a separate file and use $knowledge_command update --if-match '<exact ETag from read, including double quotes>' --body <file>; when absent, use --if-none-match '*' instead. Exit 10 means stale context: reread and reconsider, do not blindly retry or auto-merge. Never edit the shared file directly."
+  local telemetry_var signal
+  for telemetry_var in ${!OTEL_EXPORTER_OTLP@} ${!QWEN_TELEMETRY_OTLP@}; do
+    case "$telemetry_var" in
+      *ENDPOINT|*PROTOCOL) unset "$telemetry_var" ;;
+    esac
+  done
+  unset COPILOT_OTEL_FILE_EXPORTER_PATH QWEN_TELEMETRY_OUTFILE
+  export OTEL_SDK_DISABLED=true
+  export OTEL_LOGS_EXPORTER=none OTEL_METRICS_EXPORTER=none OTEL_TRACES_EXPORTER=none
+  export CLAUDE_CODE_ENABLE_TELEMETRY=0 QWEN_TELEMETRY_ENABLED=false COPILOT_OTEL_ENABLED=false
+  if [ -n "$otel_endpoint" ]; then
+    # Preserve unrelated caller attributes but replace inherited project tags.
+    local resource_attributes="" attribute
+    local -a inherited_attributes=()
+    IFS=, read -r -a inherited_attributes <<<"${OTEL_RESOURCE_ATTRIBUTES:-}"
+    for attribute in "${inherited_attributes[@]}"; do
+      case "$attribute" in
+        service.namespace=*|dev_loop.project=*|dev_loop.repository=*|"") ;;
+        *) resource_attributes+="$attribute," ;;
+      esac
+    done
+    export OTEL_RESOURCE_ATTRIBUTES="${resource_attributes}service.namespace=$otel_project,dev_loop.project=$otel_project,dev_loop.repository=$otel_repo_id"
+    export OTEL_SDK_DISABLED=false
+    export OTEL_EXPORTER_OTLP_ENDPOINT="$otel_endpoint"
+    export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+    export OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_TRACES_EXPORTER=otlp
+    export CLAUDE_CODE_ENABLE_TELEMETRY=1 QWEN_TELEMETRY_ENABLED=true COPILOT_OTEL_ENABLED=true
+    export COPILOT_OTEL_EXPORTER_TYPE=otlp-http
+    export QWEN_TELEMETRY_OTLP_ENDPOINT="$otel_endpoint" QWEN_TELEMETRY_OTLP_PROTOCOL=http
+    for signal in LOGS TRACES METRICS; do
+      export "OTEL_EXPORTER_OTLP_${signal}_ENDPOINT=$otel_endpoint/v1/${signal,,}"
+      export "QWEN_TELEMETRY_OTLP_${signal}_ENDPOINT=$otel_endpoint/v1/${signal,,}"
+    done
+  fi
 
   if [ -n "$model" ]; then
     agent_args+=(--model "$model")
@@ -344,6 +418,18 @@ run_agent() {
 
   case "$agent" in
     codex)
+      for signal in exporter trace_exporter metrics_exporter; do
+        if [ -z "$otel_endpoint" ]; then
+          agent_args+=(--config "otel.$signal=\"none\"")
+        else
+          case "$signal" in
+            exporter) telemetry_var=logs ;;
+            trace_exporter) telemetry_var=traces ;;
+            metrics_exporter) telemetry_var=metrics ;;
+          esac
+          agent_args+=(--config "otel.$signal={otlp-http={endpoint=\"$otel_endpoint/v1/$telemetry_var\",protocol=\"binary\"}}")
+        fi
+      done
       if [ -n "$effort" ]; then
         agent_args+=(--config "model_reasoning_effort=$effort")
       fi
@@ -366,13 +452,37 @@ run_agent() {
           --prompt-interactive "$prompt"
       ;;
     qwen)
+      if [ -n "$otel_endpoint" ]; then
+        agent_args+=(--telemetry --telemetry-otlp-endpoint "$otel_endpoint"
+          --telemetry-otlp-protocol http --telemetry-outfile "")
+      else
+        agent_args+=(--no-telemetry)
+      fi
       # No effort mapping here: the validation above rejects --effort for this
       # agent rather than letting it fall through unwired.
       bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
         qwen --yolo "${agent_args[@]}" --prompt-interactive "$prompt"
       ;;
+    devin)
+      # Print mode is Devin's non-interactive invocation. The loop is already
+      # the unattended controller, so prevent workspace-trust and tool approval
+      # prompts from stranding a claimed task.
+      bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
+        devin --permission-mode dangerous --respect-workspace-trust false \
+          "${agent_args[@]}" -p "$prompt"
+      ;;
+    copilot)
+      if [ -n "$effort" ]; then
+        agent_args+=(--effort "$effort")
+      fi
+      # Prompt mode exits after the task. Allow-all supplies the permission
+      # grants required by non-interactive mode, and no-ask-user keeps the
+      # worker from waiting for input nobody can provide.
+      bash -c 'export AGENT_PID=$$; exec "$@"' check-agent \
+        copilot --allow-all --no-ask-user "${agent_args[@]}" -p "$prompt"
+      ;;
   esac
-}
+)
 
 # Consecutive runs that ended without dl-finish.sh. Each one abandoned a claim,
 # a worktree, and possibly a running box, and relaunching immediately only adds
@@ -382,6 +492,9 @@ run_agent() {
 abandoned=0
 max_abandoned=3
 last_misfiled=-1
+loop_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+knowledge_helper="${loop_path%/*}/dev-knowledge/scripts/knowledge.py"
+printf -v knowledge_command 'python3 %q' "$knowledge_helper"
 
 while true; do
   pending_count="$(eligible_count)"
@@ -405,9 +518,15 @@ while true; do
     continue
   fi
 
+  # Refresh before every invocation, including retries. A broken read must not
+  # silently launch a worker without the shared instructions; absence is normal.
+  knowledge_context="$(python3 "$knowledge_helper" read --format prompt)" || {
+    printf 'loop: cannot read project working knowledge; no agent launched\n' >&2
+    exit 20
+  }
   : >"$DEV_LOOP_FINISH_MARKER"
   run_status=0
-  run_agent || run_status=$?
+  run_agent "$knowledge_context" || run_status=$?
 
   # The terminal is reset before reporting, not after: resetting afterwards
   # scrolls every diagnostic below out of view the moment it is printed.
